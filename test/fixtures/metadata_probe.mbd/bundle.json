@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0.0",
+  "manifest": {
+    "id": "com.example.metadata_probe",
+    "name": "Metadata Probe",
+    "version": "1.0.0",
+    "schemaVersion": "1.0.0",
+    "type": "application",
+    "entryPoint": "ui.main"
+  }
+}

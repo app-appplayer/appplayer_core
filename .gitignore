@@ -1,0 +1,9 @@
+# https://dart.dev/guides/libraries/private-files
+.dart_tool/
+.idea/
+.DS_Store
+pubspec.lock
+
+# Build / coverage outputs
+build/
+coverage/

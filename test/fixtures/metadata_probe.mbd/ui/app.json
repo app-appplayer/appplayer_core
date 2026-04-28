@@ -1,0 +1,9 @@
+{
+  "type": "application",
+  "title": "Metadata Probe",
+  "version": "1.0.0",
+  "initialRoute": "/main",
+  "routes": {
+    "/main": "ui://pages/main"
+  }
+}

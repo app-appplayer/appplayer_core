@@ -1,0 +1,9 @@
+{
+  "type": "page",
+  "title": "Metadata Probe",
+  "route": "/main",
+  "content": {
+    "type": "box",
+    "children": []
+  }
+}
