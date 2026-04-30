@@ -1,6 +1,6 @@
 name: appplayer_core
 description: AppPlayer Core — shared Flutter library for MCP server connection, bundle handling, and UI runtime orchestration.
-version: 0.1.0
+version: 0.1.1
 homepage: https://app-appplayer.github.io/makemind
 repository: https://github.com/app-appplayer/appplayer_core
 issue_tracker: https://github.com/app-appplayer/appplayer_core/issues
@@ -19,7 +19,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  mcp_client: ^1.1.1
+  mcp_client: ^2.0.0
   flutter_mcp_ui_core: ^0.3.0
   flutter_mcp_ui_runtime: ^0.3.0
   mcp_bundle: ^0.3.0

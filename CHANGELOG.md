@@ -1,3 +1,10 @@
+## [0.1.1] - 2026-04-30 - mcp_client 2.0 dependency
+
+### Changed
+- Upgraded `mcp_client` constraint to `^2.0.0`. Public API of appplayer_core is unchanged — mcp_client is consumed internally and not re-exported.
+
+---
+
 ## [0.1.0] - 2026-04-28 - Initial Release
 
 ### Added
