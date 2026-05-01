@@ -1,3 +1,13 @@
+## [0.1.2] - 2026-05-01 - Tool dispatcher align with runtime 0.4.3
+
+### Changed
+- `ToolDispatcher.call` now returns `Future<dynamic>` (the decoded JSON response) instead of `Future<void>`. Host self-fold removed; the runtime applies spec §3.10 auto-merge against its own state.
+- `runtime` parameter dropped from `ToolDispatcher.call` — no longer needed.
+- `AppSessionImpl._onToolCall` returns the dispatcher's response so the runtime can fold it.
+- Runtime dependency raised to `flutter_mcp_ui_runtime: ^0.4.3` (carries §3.10 auto-merge + §4.4.2 `event` variable + errorBoundary/errorRecovery `event.{error, stack}` fixes).
+
+---
+
 ## [0.1.1] - 2026-04-30 - mcp_client 2.0 dependency
 
 ### Changed
