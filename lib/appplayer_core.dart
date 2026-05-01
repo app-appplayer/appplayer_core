@@ -55,6 +55,9 @@ export 'src/model/application_definition.dart';
 
 // Logging / Metrics (observability ports — Core-defined)
 export 'src/logging/logger.dart';
+export 'src/logging/log_entry.dart';
+export 'src/logging/log_buffer.dart';
+export 'src/logging/scoped_logger.dart';
 export 'src/metrics/metrics_port.dart';
 
 // Upstream version constant re-export (flutter_mcp_ui_core) — allows hosts

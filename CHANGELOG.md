@@ -1,3 +1,15 @@
+## [0.1.3] - 2026-05-02 - Logging primitives (LogEntry / LogBuffer / ScopedLogger)
+
+### Added
+- `LogEntry` — structured record (timestamp, level, message, context, error, stackTrace).
+- `LogBuffer` — `ChangeNotifier` ring buffer (default 1000 entries) with scope/level filters. Tier shells (Pro / X / Custom) read this buffer to render in-app log viewers.
+- `ScopedLogger` — `Logger` decorator that injects a fixed scope map (e.g. `{serverId, handle}`) into every log call's context, so downstream filters can isolate logs per connection/app.
+- `CompositeLogger` — fan-out to multiple inner loggers (typical use: console adapter + LogBuffer adapter side-by-side).
+
+Core internal modules (ConnectionManager / ToolDispatcher / AppSession / NotificationRouter / ResourceSubscriber) are unchanged — composition roots inject a `ScopedLogger` and the existing `_logger.debug(...)` calls automatically carry the scope.
+
+---
+
 ## [0.1.2] - 2026-05-01 - Tool dispatcher align with runtime 0.4.3
 
 ### Changed
