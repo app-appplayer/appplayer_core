@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 class _RecordingLogger extends Logger {
   final List<({LogLevel level, String message, Map<String, Object?>? context})>
       records = [];
+  final List<({Object? error, StackTrace? stackTrace})> errors = [];
 
   @override
   void log(
@@ -14,6 +15,7 @@ class _RecordingLogger extends Logger {
     StackTrace? stackTrace,
   }) {
     records.add((level: level, message: message, context: context));
+    errors.add((error: error, stackTrace: stackTrace));
   }
 }
 
@@ -21,92 +23,145 @@ void main() {
   group('ScopedLogger', () {
     test('TC-SCOPE-001 injects scope into every log context', () {
       final inner = _RecordingLogger();
-      final scoped = ScopedLogger(inner: inner, scope: {'serverId': 's1'});
-
-      scoped.info('hello');
-
-      expect(inner.records, hasLength(1));
+      ScopedLogger(inner: inner, scope: {'serverId': 's1'}).info('hello');
       expect(inner.records.first.context, equals({'serverId': 's1'}));
     });
 
-    test('TC-SCOPE-002 caller-supplied keys take precedence over scope', () {
+    test('TC-SCOPE-002 caller-supplied keys override scope', () {
       final inner = _RecordingLogger();
-      final scoped = ScopedLogger(
+      final s = ScopedLogger(
           inner: inner, scope: {'serverId': 's1', 'tenant': 'free'});
-
-      scoped.info('hi', {'serverId': 'override', 'extra': 1});
+      s.info('hi', {'serverId': 'override', 'extra': 1});
 
       final ctx = inner.records.first.context!;
-      expect(ctx['serverId'], equals('override'));
-      expect(ctx['tenant'], equals('free'));
-      expect(ctx['extra'], equals(1));
+      expect(ctx['serverId'], 'override');
+      expect(ctx['tenant'], 'free');
+      expect(ctx['extra'], 1);
     });
 
-    test('TC-SCOPE-003 withScope merges additional keys', () {
+    test('TC-SCOPE-003 withScope merges keys', () {
       final inner = _RecordingLogger();
-      final base = ScopedLogger(inner: inner, scope: {'serverId': 's1'});
-      final nested = base.withScope({'handle': 'h1'});
+      final base = ScopedLogger(inner: inner, scope: {'a': 1});
+      base.withScope({'b': 2}).info('x');
+      expect(inner.records.first.context, equals({'a': 1, 'b': 2}));
+    });
 
-      nested.warn('w');
-
+    test('TC-SCOPE-004 convenience methods forward correct level', () {
+      final inner = _RecordingLogger();
+      final s = ScopedLogger(inner: inner);
+      s.debug('d');
+      s.info('i');
+      s.warn('w');
+      s.logError('e', StateError('x'));
       expect(
-        inner.records.first.context,
-        equals({'serverId': 's1', 'handle': 'h1'}),
+        inner.records.map((r) => r.level).toList(),
+        equals([
+          LogLevel.debug,
+          LogLevel.info,
+          LogLevel.warn,
+          LogLevel.error,
+        ]),
       );
+    });
+
+    test('TC-SCOPE-005 forwards error and stackTrace', () {
+      final inner = _RecordingLogger();
+      final err = StateError('boom');
+      final st = StackTrace.current;
+      ScopedLogger(inner: inner)
+          .log(LogLevel.error, 'fail', error: err, stackTrace: st);
+      expect(inner.errors.first.error, same(err));
+      expect(inner.errors.first.stackTrace, same(st));
+    });
+
+    test('TC-SCOPE-006 empty scope leaves caller context intact', () {
+      final inner = _RecordingLogger();
+      ScopedLogger(inner: inner).info('hi', {'a': 1});
+      expect(inner.records.first.context, equals({'a': 1}));
     });
   });
 
   group('CompositeLogger', () {
-    test('TC-COMP-001 fans out to every inner logger', () {
+    test('TC-COMP-001 fans out to every inner', () {
       final a = _RecordingLogger();
       final b = _RecordingLogger();
-      final composite = CompositeLogger([a, b]);
-
-      composite.info('once');
-
+      CompositeLogger([a, b]).info('once');
       expect(a.records, hasLength(1));
       expect(b.records, hasLength(1));
     });
+
+    test('TC-COMP-002 forwards error/stackTrace to all inners', () {
+      final a = _RecordingLogger();
+      final b = _RecordingLogger();
+      final err = StateError('boom');
+      final st = StackTrace.current;
+      CompositeLogger([a, b])
+          .log(LogLevel.error, 'fail', error: err, stackTrace: st);
+      expect(a.errors.first.error, same(err));
+      expect(b.errors.first.stackTrace, same(st));
+    });
+
+    test('TC-COMP-003 empty inner list is a safe no-op', () {
+      expect(() => CompositeLogger(const []).info('nothing'),
+          returnsNormally);
+    });
   });
 
-  group('LogBuffer × ScopedLogger integration', () {
-    test('TC-INT-001 scoped logger feeds buffer with scope-tagged entries',
-        () {
+  group('BufferLogger', () {
+    test('TC-BUF-001 pushes LogEntry with source=core', () {
       final buffer = LogBuffer();
-      final bufferLogger = _BufferLogger(buffer);
-      final scoped =
-          ScopedLogger(inner: bufferLogger, scope: {'serverId': 's1'});
+      BufferLogger(buffer).info('hello', {'k': 'v'});
+      expect(buffer.entries, hasLength(1));
+      expect(buffer.entries.first.source, LogSource.core);
+      expect(buffer.entries.first.message, 'hello');
+      expect(buffer.entries.first.context['k'], 'v');
+    });
 
-      scoped.info('connected');
-      scoped.warn('flaky');
-
-      expect(buffer.entries, hasLength(2));
+    test('TC-BUF-002 maps LogLevel→McpLogLevel', () {
+      final buffer = LogBuffer();
+      final logger = BufferLogger(buffer);
+      logger.debug('d');
+      logger.info('i');
+      logger.warn('w');
+      logger.logError('e', StateError('x'));
       expect(
-        buffer.withScope('serverId', 's1').map((e) => e.message),
-        equals(['connected', 'flaky']),
+        buffer.entries.map((e) => e.level).toList(),
+        equals([
+          McpLogLevel.debug,
+          McpLogLevel.info,
+          McpLogLevel.warning,
+          McpLogLevel.error,
+        ]),
       );
     });
   });
-}
 
-class _BufferLogger extends Logger {
-  _BufferLogger(this._buffer);
-  final LogBuffer _buffer;
+  group('Integration', () {
+    test('TC-INT-001 Composite([Console, Buffer]) lands in both', () {
+      final recordingConsole = _RecordingLogger();
+      final buffer = LogBuffer();
+      final logger = CompositeLogger(<Logger>[
+        recordingConsole,
+        BufferLogger(buffer),
+      ]);
 
-  @override
-  void log(
-    LogLevel level,
-    String message, {
-    Map<String, Object?>? context,
-    Object? error,
-    StackTrace? stackTrace,
-  }) {
-    _buffer.add(LogEntry(
-      level: level,
-      message: message,
-      context: context ?? const {},
-      error: error,
-      stackTrace: stackTrace,
-    ));
-  }
+      logger.info('once');
+      expect(recordingConsole.records, hasLength(1));
+      expect(buffer.entries, hasLength(1));
+    });
+
+    test('TC-INT-002 LogBuffer.withSource splits core push and fromMcp push',
+        () {
+      final buffer = LogBuffer();
+      BufferLogger(buffer).info('core msg');
+      buffer.add(LogEntry.fromMcp(
+          serverId: 's1',
+          params: {'level': 'warning', 'data': 'mcp msg'}));
+
+      expect(buffer.withSource(LogSource.core).map((e) => e.message),
+          equals(['core msg']));
+      expect(buffer.withSource(LogSource.mcp).map((e) => e.message),
+          equals(['mcp msg']));
+    });
+  });
 }

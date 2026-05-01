@@ -1,14 +1,16 @@
 import 'package:flutter/foundation.dart';
+import 'package:mcp_client/mcp_client.dart' show McpLogLevel;
 
 import 'log_entry.dart';
-import 'logger.dart';
 
-/// In-memory ring buffer that accumulates [LogEntry] records up to
-/// [capacity] and notifies listeners on every change.
+/// Ring buffer of recent [LogEntry] records — exposed as a
+/// `ChangeNotifier` so an in-app viewer rebuilds on every push.
 ///
-/// Tier shells (Pro / X / Custom / dev tooling) read this buffer to render
-/// log viewers; the core library never reads it back. A single buffer can
-/// be filtered per scope by callers — see [filter] and [LogEntry.scope].
+/// Holds both [LogSource.core] (AppPlayer diagnostics, fed by
+/// `BufferLogger`) and [LogSource.mcp] (server-emitted
+/// `notifications/message`, fed by the host's `onMcpLogMessage`
+/// callback) so production users can export everything for issue
+/// reports from a single place.
 class LogBuffer extends ChangeNotifier {
   LogBuffer({this.capacity = 1000})
       : assert(capacity > 0, 'LogBuffer capacity must be positive');
@@ -16,10 +18,9 @@ class LogBuffer extends ChangeNotifier {
   final int capacity;
   final List<LogEntry> _entries = <LogEntry>[];
 
-  /// Read-only snapshot of current entries (oldest first).
+  /// Read-only snapshot (oldest first).
   List<LogEntry> get entries => List<LogEntry>.unmodifiable(_entries);
 
-  /// Append [entry], evicting the oldest record once [capacity] is reached.
   void add(LogEntry entry) {
     _entries.add(entry);
     if (_entries.length > capacity) {
@@ -28,22 +29,21 @@ class LogBuffer extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Drop every recorded entry.
   void clear() {
     if (_entries.isEmpty) return;
     _entries.clear();
     notifyListeners();
   }
 
-  /// Iterate entries matching [test] (oldest first).
   Iterable<LogEntry> filter(bool Function(LogEntry entry) test) =>
       _entries.where(test);
 
-  /// Convenience filter — entries whose `context[key] == value`.
+  Iterable<LogEntry> withSource(LogSource source) =>
+      _entries.where((e) => e.source == source);
+
   Iterable<LogEntry> withScope(String key, Object? value) =>
       _entries.where((e) => e.context[key] == value);
 
-  /// Convenience filter — entries at or above [minLevel].
-  Iterable<LogEntry> atLeast(LogLevel minLevel) =>
+  Iterable<LogEntry> atLeast(McpLogLevel minLevel) =>
       _entries.where((e) => e.level.index >= minLevel.index);
 }

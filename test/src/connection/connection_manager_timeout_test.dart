@@ -7,8 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState;
 import 'package:mocktail/mocktail.dart';
 
-import '../../helpers/mocks.dart';
-
 ServerConfig _server() => ServerConfig(
       id: 's1',
       name: 'n',

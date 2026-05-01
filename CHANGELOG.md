@@ -1,3 +1,26 @@
+## [0.1.4] - 2026-05-02 - Field-report logging stack — corrects 0.1.3 wiring
+
+Supersedes the misaligned 0.1.3 release. The logging primitives shipped in 0.1.3 conflated AppPlayer Core's own diagnostic logger with the MCP `notifications/message` log channel; this release re-architects them so a single in-app `LogBuffer` collects both sources, distinguished by `LogEntry.source`, and the MCP logging spec (`notifications/message` + `logging/setLevel`) is wired to its own routing path.
+
+### Changed (breaking — 0.1.3 → 0.1.4)
+- `LogEntry` now requires a `source: LogSource` (enum `core` / `mcp`). `level` field is now `McpLogLevel` (RFC 5424 8 levels — verbatim) instead of the 4-level `LogLevel`. Construct via `LogEntry.fromCore(LogLevel)` (4→8 mapping) or `LogEntry.fromMcp({serverId, params})`.
+- `LogBuffer.atLeast` parameter changed from `LogLevel` to `McpLogLevel`. Added `withSource(LogSource)` filter.
+
+### Added
+- `BufferLogger` — `Logger` adapter that pushes records into a `LogBuffer` as `source=core` entries. Pair with a console adapter inside `CompositeLogger` so a single Core diagnostic call lands in DevTools (development) AND the in-app `LogBuffer` (field report).
+- MCP logging spec wiring (MOD-RUNTIME-005a, NFR-OBS-006~007):
+  - `NotificationRouter` routes `notifications/message` into a host-provided `McpLogMessageHandler` callback `(serverId, params)`.
+  - `AppPlayerCoreService.initialize(... onMcpLogMessage: ...)` parameter.
+  - `AppPlayerCoreService.setMcpLoggingLevel(serverId, McpLogLevel)` — sends `logging/setLevel` so the server filters its own emission (server-side filter, spec-canonical).
+  - `McpLogMessageHandler` typedef and `McpLogLevel` (re-export from `mcp_client`) in the public barrel.
+
+### Rationale
+Two log layers, one destination:
+- **Development** uses OS standard log pipelines (host `ConsoleLogger` → `dart:developer.log` → DevTools / Console.app / logcat). Core diagnostics also flow there via `CompositeLogger`.
+- **Field reports** require an in-app surface that production users can export when filing an issue. `BufferLogger` (Core diagnostics) and `onMcpLogMessage` (server logs) both feed the same `LogBuffer`, distinguished by `LogEntry.source`.
+
+---
+
 ## [0.1.3] - 2026-05-02 - Logging primitives (LogEntry / LogBuffer / ScopedLogger)
 
 ### Added
@@ -7,6 +30,8 @@
 - `CompositeLogger` — fan-out to multiple inner loggers (typical use: console adapter + LogBuffer adapter side-by-side).
 
 Core internal modules (ConnectionManager / ToolDispatcher / AppSession / NotificationRouter / ResourceSubscriber) are unchanged — composition roots inject a `ScopedLogger` and the existing `_logger.debug(...)` calls automatically carry the scope.
+
+> **Note:** This release misaligned the LogBuffer wiring with the MCP logging spec — see 0.1.4 for the corrected design (LogEntry.source, LogEntry.fromMcp, NotificationRouter `notifications/message` handler, `setMcpLoggingLevel` API).
 
 ---
 

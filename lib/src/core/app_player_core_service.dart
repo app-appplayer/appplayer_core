@@ -7,6 +7,7 @@ import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
     hide ApplicationDefinition;
 import 'package:mcp_bundle/mcp_bundle.dart'
     hide BundleLoadException, BundleLoader, MetricsPort;
+import 'package:mcp_client/mcp_client.dart' show McpLogLevel;
 
 import '../bundle/bundle_application_adapter.dart';
 import '../bundle/bundle_entry_point.dart';
@@ -109,6 +110,13 @@ class AppPlayerCoreService {
 
   ValueListenable<Brightness>? get hostBrightness => _hostBrightness;
 
+  /// Optional handler invoked when an MCP server emits
+  /// `notifications/message` (logging spec). Hosts typically push the
+  /// payload into a `LogBuffer` so the in-app log viewer can render it.
+  /// Receives `(serverId, params)` where `params` carries the raw MCP
+  /// `{level, logger?, data}` shape.
+  McpLogMessageHandler? _onMcpLogMessage;
+
   /// FR-CORE-001
   Future<void> initialize({
     required ServerStorage storage,
@@ -121,6 +129,7 @@ class AppPlayerCoreService {
     CredentialVault? credentialVault,
     HealthMonitorConfig? healthConfig,
     ValueListenable<Brightness>? hostBrightness,
+    McpLogMessageHandler? onMcpLogMessage,
   }) async {
     if (_initialized) {
       throw StateError('AppPlayerCoreService already initialized');
@@ -155,6 +164,7 @@ class AppPlayerCoreService {
       logger: _logger,
     );
     _hostBrightness = hostBrightness;
+    _onMcpLogMessage = onMcpLogMessage;
 
     _dashboard = DashboardOrchestrator(
       conn: _conn,
@@ -216,6 +226,17 @@ class AppPlayerCoreService {
     return _storage.deleteServer(id);
   }
 
+  /// MCP logging spec — request the server identified by [serverId] to
+  /// emit only messages at or above [level] via `notifications/message`.
+  /// Returns `false` when there is no active connection for [serverId].
+  Future<bool> setMcpLoggingLevel(String serverId, McpLogLevel level) async {
+    _assertReady();
+    final client = _conn.getConnection(serverId)?.client;
+    if (client == null) return false;
+    await client.setLoggingLevel(level);
+    return true;
+  }
+
   /// FR-CORE-002 — Online path (MCP server serves `ui://` application).
   ///
   /// [trustLevel] gates which `client.*` actions the runtime will
@@ -266,7 +287,12 @@ class AppPlayerCoreService {
         pageLoader: _appLoader.pageLoaderFor(client),
       );
       runtime.setTrustLevel(trustLevel);
-      _notifRouter.register(client: client, runtime: runtime);
+      _notifRouter.register(
+        client: client,
+        runtime: runtime,
+        serverId: serverId,
+        onMcpLogMessage: _onMcpLogMessage,
+      );
     } else {
       // Reused runtime — honour the caller's trust level in case the
       // launcher bumped the app's grant between opens.

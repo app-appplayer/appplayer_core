@@ -58,7 +58,11 @@ export 'src/logging/logger.dart';
 export 'src/logging/log_entry.dart';
 export 'src/logging/log_buffer.dart';
 export 'src/logging/scoped_logger.dart';
+export 'src/logging/buffer_logger.dart';
 export 'src/metrics/metrics_port.dart';
+export 'src/runtime/notification_router.dart' show McpLogMessageHandler;
+// MCP logging spec — host passes McpLogLevel to setMcpLoggingLevel().
+export 'package:mcp_client/mcp_client.dart' show McpLogLevel;
 
 // Upstream version constant re-export (flutter_mcp_ui_core) — allows hosts
 // to display the DSL version without importing the runtime package directly.

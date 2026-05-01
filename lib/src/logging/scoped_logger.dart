@@ -1,11 +1,9 @@
 import 'logger.dart';
 
-/// Logger decorator that injects a fixed [scope] map into every log call's
-/// `context` so downstream consumers (e.g. `LogBuffer` viewers) can filter
-/// by scope (typically `serverId`, `handle`, `bundleId`, `tenant`).
-///
-/// Inner logger receives the merged context. Caller-supplied keys take
-/// precedence over scope keys when they collide.
+/// Logger decorator that injects a fixed [scope] map into every log
+/// call's `context`. Caller-supplied keys override scope keys on
+/// collision. Typical scope: `{serverId, handle}` so downstream filters
+/// can isolate logs per connection / app.
 class ScopedLogger extends Logger {
   ScopedLogger({
     required Logger inner,
@@ -16,8 +14,6 @@ class ScopedLogger extends Logger {
   final Logger _inner;
   final Map<String, Object?> _scope;
 
-  /// Returns a new [ScopedLogger] wrapping the same inner logger with
-  /// [additional] keys merged into the existing scope.
   ScopedLogger withScope(Map<String, Object?> additional) {
     return ScopedLogger(
       inner: _inner,
@@ -33,22 +29,23 @@ class ScopedLogger extends Logger {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    final Map<String, Object?> merged = <String, Object?>{
-      ..._scope,
-      if (context != null) ...context,
-    };
     _inner.log(
       level,
       message,
-      context: merged,
+      context: <String, Object?>{
+        ..._scope,
+        if (context != null) ...context,
+      },
       error: error,
       stackTrace: stackTrace,
     );
   }
 }
 
-/// Logger that fans out every record to multiple inner loggers
-/// (typical use: a console adapter and a [LogBuffer] adapter side-by-side).
+/// Fan-out logger — every record is forwarded to each inner logger.
+/// Typical use: `CompositeLogger([ConsoleLogger, BufferLogger])` so a
+/// single Core diagnostic call lands in DevTools (development) AND the
+/// in-app `LogBuffer` (field report).
 class CompositeLogger extends Logger {
   CompositeLogger(List<Logger> inners)
       : _inners = List<Logger>.unmodifiable(inners);

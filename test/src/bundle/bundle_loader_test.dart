@@ -125,7 +125,10 @@ void main() {
       expect(bundle.manifest.id, bundleId);
       expect(bundle.directory, isNotNull,
           reason: 'FR-BUNDLE-009: directory must survive the loader');
-      expect(bundle.directory, mbd.path);
+      // Compare in normalized form so a Windows backslash matches the
+      // forward slash used by the test fixture.
+      String norm(String s) => s.replaceAll('\\', '/');
+      expect(norm(bundle.directory!), equals(norm(mbd.path)));
     });
 
     test('TC-BUNDLE-LOAD-009: installed ref missing id → notFound', () async {
