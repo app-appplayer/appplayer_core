@@ -78,17 +78,15 @@ void main() {
       verify(() => server.client.onNotification(any(), any())).called(1);
     });
 
-    test('IT-003: tool dispatch folds JSON into runtime state', () async {
+    test('IT-003: tool dispatch returns parsed JSON response (spec §3.10 fold is runtime responsibility)',
+        () async {
       await core.openAppFromServer('s1');
-      final runtime = core.runtimeManagerForInternals
-          .getRuntime(const AppHandle.server('s1'))!;
-      await core.toolDispatcherForInternals.call(
+      final result = await core.toolDispatcherForInternals.call(
         client: server.client,
-        runtime: runtime,
         tool: 'incr',
         params: const {},
       );
-      expect(runtime.stateManager.get<int>('count'), 7);
+      expect(result, equals({'count': 7}));
     });
 
     test('IT-004: resource subscribe writes initial state', () async {

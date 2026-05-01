@@ -1,21 +1,22 @@
 import 'dart:convert';
 
-import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
 import 'package:mcp_client/mcp_client.dart' hide Logger;
 
 import '../exceptions.dart';
 import '../logging/logger.dart';
 
-/// Dispatches MCP tool calls and folds their JSON responses into runtime state
+/// Dispatches MCP tool calls and returns the parsed JSON response so the
+/// runtime can apply spec §3.10 auto-merge against its own state. Host
+/// responsibilities here are limited to MCP forwarding, listTools-based
+/// existence checks (for clearer error messaging), and exception modelling
 /// (MOD-RUNTIME-003, FR-TOOL-001~005).
 class ToolDispatcher {
   ToolDispatcher({Logger? logger}) : _logger = logger ?? NoopLogger();
 
   final Logger _logger;
 
-  Future<void> call({
+  Future<dynamic> call({
     required Client client,
-    required MCPUIRuntime runtime,
     required String tool,
     required Map<String, dynamic> params,
   }) async {
@@ -47,22 +48,18 @@ class ToolDispatcher {
     _logger.debug('Tool result',
         {'tool': tool, 'items': result.content.length});
 
-    if (result.content.isEmpty) return;
+    if (result.content.isEmpty) return null;
     final first = result.content.first;
-    if (first is! TextContent) return;
+    if (first is! TextContent) return null;
 
     try {
-      final decoded = jsonDecode(first.text);
-      if (decoded is! Map<String, dynamic>) return;
-      decoded.forEach((key, value) {
-        runtime.stateManager.set(key, value);
-        _logger.debug('State updated', {'key': key});
-      });
+      return jsonDecode(first.text);
     } catch (e) {
       _logger.warn('Failed to parse tool response', {
         'tool': tool,
         'text': first.text,
       }, e);
+      return null;
     }
   }
 }

@@ -14,19 +14,13 @@ Tool _tool(String name) => Tool(
 
 void main() {
   late MockClient client;
-  late MockMCPUIRuntime runtime;
-  late MockStateManager state;
 
   setUp(() {
     client = MockClient();
-    runtime = MockMCPUIRuntime();
-    state = MockStateManager();
-    when(() => runtime.stateManager).thenReturn(state);
-    when(() => state.set(any(), any())).thenReturn(null);
   });
 
   group('ToolDispatcher (MOD-RUNTIME-003)', () {
-    test('TC-TOOL-001: normal call sets state', () async {
+    test('TC-TOOL-001: normal call returns decoded JSON map', () async {
       when(() => client.listTools())
           .thenAnswer((_) async => [_tool('incr')]);
       when(() => client.callTool('incr', any())).thenAnswer(
@@ -34,14 +28,13 @@ void main() {
             CallToolResult([const TextContent(text: '{"count":5}')]),
       );
 
-      await ToolDispatcher().call(
+      final result = await ToolDispatcher().call(
         client: client,
-        runtime: runtime,
         tool: 'incr',
         params: const {},
       );
 
-      verify(() => state.set('count', 5)).called(1);
+      expect(result, equals({'count': 5}));
     });
 
     test('TC-TOOL-002: tool not found', () async {
@@ -50,7 +43,6 @@ void main() {
       await expectLater(
         ToolDispatcher().call(
           client: client,
-          runtime: runtime,
           tool: 'missing',
           params: const {},
         ),
@@ -58,47 +50,43 @@ void main() {
       );
     });
 
-    test('TC-TOOL-003: multiple state keys set', () async {
+    test('TC-TOOL-003: multi-key response returned verbatim', () async {
       when(() => client.listTools())
           .thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenAnswer((_) async =>
           CallToolResult([const TextContent(text: '{"a":1,"b":"x"}')]));
-      await ToolDispatcher().call(
+      final result = await ToolDispatcher().call(
         client: client,
-        runtime: runtime,
         tool: 't',
         params: const {},
       );
-      verify(() => state.set('a', 1)).called(1);
-      verify(() => state.set('b', 'x')).called(1);
+      expect(result, equals({'a': 1, 'b': 'x'}));
     });
 
-    test('TC-TOOL-004: empty content — no state update', () async {
+    test('TC-TOOL-004: empty content — returns null', () async {
       when(() => client.listTools())
           .thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any()))
           .thenAnswer((_) async => const CallToolResult([]));
-      await ToolDispatcher().call(
+      final result = await ToolDispatcher().call(
         client: client,
-        runtime: runtime,
         tool: 't',
         params: const {},
       );
-      verifyNever(() => state.set(any(), any()));
+      expect(result, isNull);
     });
 
-    test('TC-TOOL-006: parse failure — logged, no throw', () async {
+    test('TC-TOOL-006: parse failure — logged, returns null', () async {
       when(() => client.listTools())
           .thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenAnswer((_) async =>
           CallToolResult([const TextContent(text: 'not-json')]));
-      await ToolDispatcher().call(
+      final result = await ToolDispatcher().call(
         client: client,
-        runtime: runtime,
         tool: 't',
         params: const {},
       );
-      verifyNever(() => state.set(any(), any()));
+      expect(result, isNull);
     });
 
     test('TC-TOOL-007: listTools failure → ToolExecutionException',
@@ -107,7 +95,6 @@ void main() {
       await expectLater(
         ToolDispatcher().call(
           client: client,
-          runtime: runtime,
           tool: 't',
           params: const {},
         ),
@@ -122,7 +109,6 @@ void main() {
       await expectLater(
         ToolDispatcher().call(
           client: client,
-          runtime: runtime,
           tool: 't',
           params: const {},
         ),

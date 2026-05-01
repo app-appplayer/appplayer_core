@@ -90,18 +90,18 @@ class AppSessionImpl implements AppSession {
     );
   }
 
-  Future<void> _onToolCall(String tool, Map<String, dynamic> params) async {
+  Future<dynamic> _onToolCall(
+      String tool, Map<String, dynamic> params) async {
     final client = _client;
     if (client == null) {
       _logger.warn('session.tool.no_client', {
         'handle': handle.toString(),
         'tool': tool,
       });
-      return;
+      return null;
     }
-    await _tools.call(
+    return _tools.call(
       client: client,
-      runtime: _runtime,
       tool: tool,
       params: params,
     );
