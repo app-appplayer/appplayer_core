@@ -1,3 +1,8 @@
+## [0.1.5] - 2026-05-03 - flutter_mcp_ui 0.3.2 / 0.4.4 alignment
+
+### Changed
+- Bump `flutter_mcp_ui_core` to `^0.3.2` and `flutter_mcp_ui_runtime` to `^0.4.4` for the M3 token shorthand consumption layer (`text.variant`, `box.padding`, `card.shape/elevation`, `button.elevation`, `icon.size/sizeToken`), `FormFactorScope` token tracking, opt-in per-form-factor property override, and `box` flat-form constraint properties.
+
 ## [0.1.4] - 2026-05-02 - Field-report logging stack — corrects 0.1.3 wiring
 
 Supersedes the misaligned 0.1.3 release. The logging primitives shipped in 0.1.3 conflated AppPlayer Core's own diagnostic logger with the MCP `notifications/message` log channel; this release re-architects them so a single in-app `LogBuffer` collects both sources, distinguished by `LogEntry.source`, and the MCP logging spec (`notifications/message` + `logging/setLevel`) is wired to its own routing path.
