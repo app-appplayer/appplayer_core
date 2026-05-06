@@ -1,3 +1,8 @@
+## [0.1.6] - 2026-05-04 - flutter_mcp_ui 0.4.0 / 0.5.0 + mcp_bundle 0.3.1 alignment
+
+- Bumps `flutter_mcp_ui_core` to `^0.4.0` and `flutter_mcp_ui_runtime` to `^0.5.0` for the spec 1.3.3 alignment cycle.
+- Bumps `mcp_bundle` to `^0.3.1` (cascade: EthosRecord JSON round-trip, `BundleFolder.agents` reserved, `AgentsSection` / `PhilosophySection` models, `EthosStorePort` extensions).
+
 ## [0.1.5] - 2026-05-03 - flutter_mcp_ui 0.3.2 / 0.4.4 alignment
 
 ### Changed
