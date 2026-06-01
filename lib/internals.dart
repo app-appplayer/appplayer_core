@@ -36,3 +36,19 @@ export 'src/dashboard/dashboard_orchestrator.dart';
 
 // Tenant internals
 export 'src/tenant/tenant_resolver.dart';
+
+// brain_kernel is consumed directly — host adapters import
+// `package:brain_kernel/brain_kernel.dart` (KernelApp, KernelEndpoint,
+// standardTools, etc.) without going through this barrel. The old
+// `BrainBridge` shim was retired in 2026-05-24; the kernel's
+// `system/` directory is now the single source for boot, activation,
+// active context, and the standard tool surface.
+
+// JS tool execution internals — runs `tools[].kind=js` bodies in
+// process. Hosts that add custom atoms (fs / workspace / kb / ui / bus,
+// etc.) or that manage isolate lifecycle directly depend on these.
+export 'src/js/atom_category.dart';
+export 'src/js/js_tool_runtime.dart';
+export 'src/js/atoms/agent_atom.dart';
+export 'src/js/atoms/bundle_atom.dart';
+export 'src/js/atoms/mcp_atom.dart';

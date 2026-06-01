@@ -1,7 +1,10 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
+import 'package:mcp_bundle/mcp_bundle.dart' show McpBundle;
 import 'package:mcp_client/mcp_client.dart' hide Logger;
+
+import '../js/js_tool_runtime.dart';
 
 import '../connection/connection_manager.dart';
 import '../logging/logger.dart';
@@ -24,13 +27,20 @@ class AppSessionImpl implements AppSession {
     required ResourceSubscriber resourceSubscriber,
     required Logger logger,
     this.metadata,
+    this.bundle,
     this.hostBrightness,
+    JsToolRuntime? jsRuntime,
+    List<String> jsToolNames = const <String>[],
+    Future<void> Function()? onClose,
   })  : _runtime = runtime,
         _conn = conn,
         _runtimeManager = runtimeManager,
         _tools = toolDispatcher,
         _subs = resourceSubscriber,
-        _logger = logger;
+        _logger = logger,
+        _jsRuntime = jsRuntime,
+        _jsToolNames = jsToolNames,
+        _onClose = onClose;
 
   @override
   final AppHandle handle;
@@ -40,6 +50,9 @@ class AppSessionImpl implements AppSession {
 
   @override
   final AppMetadata? metadata;
+
+  @override
+  final McpBundle? bundle;
 
   /// Host-provided brightness feed passed to `runtime.buildUI` so the
   /// DSL's `mode: 'system'` resolves against the launcher's theme choice.
@@ -51,6 +64,9 @@ class AppSessionImpl implements AppSession {
   final ToolDispatcher _tools;
   final ResourceSubscriber _subs;
   final Logger _logger;
+  final JsToolRuntime? _jsRuntime;
+  final List<String> _jsToolNames;
+  final Future<void> Function()? _onClose;
 
   bool _closed = false;
 
@@ -149,5 +165,25 @@ class AppSessionImpl implements AppSession {
       );
     }
     await _runtimeManager.removeRuntime(handle);
+    // Tear down the JS tool surface — unregister every dispatcher entry
+    // and dispose the worker isolate.
+    for (final name in _jsToolNames) {
+      _tools.unregisterInProcessTool(name);
+    }
+    final js = _jsRuntime;
+    if (js != null) {
+      try {
+        await js.dispose();
+      } catch (e) {
+        _logger.warn('JsToolRuntime dispose threw', null, e);
+      }
+    }
+    if (_onClose != null) {
+      try {
+        await _onClose!();
+      } catch (e) {
+        _logger.warn('AppSession onClose hook threw', null, e);
+      }
+    }
   }
 }

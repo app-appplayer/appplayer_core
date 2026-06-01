@@ -7,6 +7,9 @@ analyzer:
     # `flutter analyze --no-fatal-infos` finishes with exit 0.
     prefer_const_constructors: ignore
     no_leading_underscores_for_local_identifiers: ignore
+    # JsToolIsolate internal `_EvalResult` / `_K` reused on public
+    # method signatures — vibe_studio_base 와 동일 패턴 (internal API).
+    library_private_types_in_public_api: ignore
   exclude:
     - test/**.mocks.dart
 

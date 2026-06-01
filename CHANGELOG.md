@@ -1,3 +1,17 @@
+## 0.1.7 - 2026-06-01 - brain_kernel KernelApp + bundle session bridge integration + MCP serving
+
+- **BrainBridge removed** (phase D · 2026-05-24) — 451 lines + 6 facade wrappers + 2 tests dropped. `AppPlayerCoreService` now calls `KernelApp.boot(...)` directly, registers `standardTools(app)`, and delegates `setActiveBundle` / `scopeIdFor`. Zero external-shell cascade.
+- **bundle session bridge wiring** (2026-05-25) — `BundleSessionBridge` lifecycle wired at 5 points of `AppPlayerCoreService` (boot / activate / onClose / closeApp / dispose). `_sessions` is a per-bundleId map. `McpAtom` + `AgentAtom` gain optional `bridge` / `session` arguments and wrap dispatch in `bridge.runScoped(session, ...)`.
+- **MCP serving** (`specs/mcp_serving` 1.0) — `_activateBundleSections` exposes the active bundle at the well-known `bundle://manifest.json` resource (shared by the local-bundle and served-bundle paths). `openAppFromServer` reconstructs a served bundle: it detects the document, parses it with `McpBundleLoader.fromJson`, and runs the same kernel activation a local bundle uses (knowledge / settings / behavior come live); tool execution stays remote and the UI loads via `ui://app`. New `servedResources` / `readServedResource` accessors. `ApplicationLoader.load` gains an optional `resources` parameter so the server is listed only once.
+- **import unification** — the bridge ships inside the kernel (`brain_kernel/lib/src/system/bridge/`), so hosts import only `package:brain_kernel/brain_kernel.dart`.
+- **analyze cleanup** — removed 5 `unnecessary_import` hints across `test/src/dashboard/dashboard_bundle_test.dart` + `test/src/session/app_session_impl_test.dart` (info → 0).
+
+### Changed (dependency floor)
+- `brain_kernel` `^0.1.0` → `^0.1.1` — the served-bundle path relies on brain_kernel 0.1.1 (bundle behavior activation + the MCP serving surface). This transitively raises `mcp_bundle` to `0.4.1`; appplayer_core references no 0.4.1-only symbol directly, so its own `mcp_bundle` floor stays `^0.4.0`.
+
+### Tests
+- 301 + 1 skipped PASS · analyze 0 issues.
+
 ## [0.1.6] - 2026-05-04 - flutter_mcp_ui 0.4.0 / 0.5.0 + mcp_bundle 0.3.1 alignment
 
 - Bumps `flutter_mcp_ui_core` to `^0.4.0` and `flutter_mcp_ui_runtime` to `^0.5.0` for the spec 1.3.3 alignment cycle.

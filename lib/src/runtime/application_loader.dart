@@ -34,17 +34,27 @@ class ApplicationLoader {
 
   /// FR-APP-ONLINE-001~004 — Raw JSON form used internally by
   /// [loadOnline] and by legacy callers.
-  Future<Map<String, dynamic>> load(Client client) async {
-    final List<Resource> resources;
-    try {
-      resources = await client.listResources();
-    } catch (e, st) {
-      throw _wrapLoad('listResources failed', e, st);
+  /// [resources] lets a caller pass a resource list it has already fetched
+  /// (e.g. for MCP Serving bundle-document detection) so the server is listed
+  /// only once; when null the list is fetched here.
+  Future<Map<String, dynamic>> load(
+    Client client, {
+    List<Resource>? resources,
+  }) async {
+    final List<Resource> resolved;
+    if (resources != null) {
+      resolved = resources;
+    } else {
+      try {
+        resolved = await client.listResources();
+      } catch (e, st) {
+        throw _wrapLoad('listResources failed', e, st);
+      }
     }
 
-    _logger.debug('Resources listed', {'count': resources.length});
+    _logger.debug('Resources listed', {'count': resolved.length});
 
-    final appUri = _pickAppUri(resources);
+    final appUri = _pickAppUri(resolved);
     if (appUri == null) {
       throw ResourceNotFoundException('No UI resources found');
     }

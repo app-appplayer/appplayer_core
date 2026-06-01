@@ -91,5 +91,11 @@ export 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
         TrustLevel,
         TrustLevelManager;
 
+// Settings host port — persists the per-bundle
+// `settings.sections[].fields[]` user values. Each host (Standard / Pro /
+// X / Custom) supplies its own implementation backed by its preferred
+// storage and injects it through `initialize(settingsStore: ...)`.
+export 'src/settings/settings_store.dart';
+
 // Exceptions
 export 'src/exceptions.dart';

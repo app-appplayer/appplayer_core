@@ -136,5 +136,105 @@ void main() {
       );
       await core.dispose();
     });
+
+    test('TC-CORE-013: settings before initialize throws', () {
+      final core = _testCore();
+      expect(() => core.settings, throwsA(isA<StateError>()));
+    });
+
+    test('TC-CORE-014: settings defaults to InMemorySettingsStore', () async {
+      final core = _testCore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+      );
+      expect(core.settings, isA<InMemorySettingsStore>());
+      await core.dispose();
+    });
+
+    test('TC-CORE-015: settings can be injected via initialize', () async {
+      final core = _testCore();
+      final injected = InMemorySettingsStore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+        settingsStore: injected,
+      );
+      expect(core.settings, same(injected));
+      await core.dispose();
+    });
+
+    test('TC-CORE-016: initialize accepts custom workspaceId', () async {
+      final core = _testCore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+        workspaceId: 'appplayer.standard',
+      );
+      // No public reader for workspaceId, but a clean dispose proves
+      // brain_kernel boot + teardown both ran.
+      await core.dispose();
+    });
+
+    test('TC-CORE-017: setActiveSession before initialize throws', () {
+      final core = _testCore();
+      expect(
+        () => core.setActiveSession(const AppHandle.bundle('x')),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('TC-CORE-018: setActiveSession with bundle / server / null',
+        () async {
+      final core = _testCore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+      );
+      // Three branches: bundle handle, server handle, null.
+      core.setActiveSession(const AppHandle.bundle('com.example.a'));
+      core.setActiveSession(const AppHandle.server('s1'));
+      core.setActiveSession(null);
+      await core.dispose();
+    });
+
+    test('TC-CORE-019: server CRUD passthrough (list / save / get / delete)',
+        () async {
+      final storage = InMemoryServerStorage();
+      final core = _testCore();
+      await core.initialize(
+        storage: storage,
+        bundleInstallRoot: '/tmp/core-test-bundles',
+      );
+      // list — empty.
+      expect(await core.listServers(), isEmpty);
+
+      // save → list contains it.
+      await core.saveServer(_server('s1'));
+      expect((await core.listServers()).single.id, 's1');
+
+      // get → matches.
+      expect((await core.getServer('s1'))?.id, 's1');
+      expect(await core.getServer('missing'), isNull);
+
+      // delete → list empty again.
+      await core.deleteServer('s1');
+      expect(await core.listServers(), isEmpty);
+      await core.dispose();
+    });
+
+    test('TC-CORE-020: setMcpLoggingLevel returns false when no client',
+        () async {
+      final core = _testCore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+      );
+      expect(
+        await core.setMcpLoggingLevel('never', McpLogLevel.info),
+        isFalse,
+      );
+      await core.dispose();
+    });
   });
 }

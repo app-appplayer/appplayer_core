@@ -78,6 +78,57 @@ void main() {
       verify(() => server.client.onNotification(any(), any())).called(1);
     });
 
+    test(
+        'IT-007: MCP Serving 1.0 — server bundle document is reconstructed + served',
+        () async {
+      // specs/mcp_serving/spec/1.0 — the server exposes the bundle document
+      // alongside ui://app; the client reconstructs the McpBundle and serves
+      // it in-process at the well-known URI (equivalence with a local bundle).
+      final doc = <String, dynamic>{
+        'schemaVersion': '1.0.0',
+        'manifest': {'id': 'srv.bundle', 'name': 'Served', 'version': '1.0.0'},
+        'settings': {
+          'groups': [
+            {'key': 'general', 'label': 'General', 'fields': <dynamic>[]},
+          ],
+        },
+      };
+      server.withResources([
+        Resource(
+          uri: 'ui://app',
+          name: 'App',
+          description: '',
+          mimeType: 'application/json',
+        ),
+        Resource(
+          uri: 'bundle://manifest.json',
+          name: 'Bundle',
+          description: '',
+          mimeType: 'application/json',
+        ),
+      ]);
+      server.withResourceContent('ui://app', minimalAppDefinition(id: 's1-app'));
+      server.withResourceContent('bundle://manifest.json', doc);
+
+      final session = await core.openAppFromServer('s1');
+      expect(session.source, AppSource.server);
+
+      // The reconstructed bundle is now served in-process at the well-known
+      // URI, and reconstructs to the same manifest.
+      expect(core.servedResources, contains('bundle://manifest.json'));
+      final served = await core.readServedResource('bundle://manifest.json')
+          as Map<String, dynamic>;
+      expect((served['manifest'] as Map)['id'], 'srv.bundle');
+    });
+
+    test('IT-008: MCP Serving 1.0 — server without a bundle document is unaffected',
+        () async {
+      // The default setUp server serves only ui://app (an existing server).
+      final session = await core.openAppFromServer('s1');
+      expect(session.source, AppSource.server);
+      expect(core.servedResources, isNot(contains('bundle://manifest.json')));
+    });
+
     test('IT-003: tool dispatch returns parsed JSON response (spec §3.10 fold is runtime responsibility)',
         () async {
       await core.openAppFromServer('s1');

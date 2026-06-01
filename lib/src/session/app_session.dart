@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:mcp_bundle/mcp_bundle.dart' show McpBundle;
 
 import '../metadata/app_metadata.dart';
 import 'app_handle.dart';
@@ -13,6 +14,15 @@ abstract class AppSession {
   AppHandle get handle;
   AppSource get source;
   AppMetadata? get metadata;
+
+  /// The bundle manifest, surfaced only for bundle-backed sessions.
+  /// Server-backed sessions return `null`. Host shells (Standard chrome,
+  /// Pro launcher, etc.) read the declaration regions of the manifest
+  /// — `wiring` (lifecycle / domainActions / chat / lifecycleState),
+  /// `settings.sections`, `chat.slashCommands`, etc. — directly and map
+  /// them onto their own chrome surfaces (mcp_bundle spec 1.0 §6 wiring
+  /// and the settings section).
+  McpBundle? get bundle;
 
   /// Builds the Flutter widget tree for this session. Tool call / resource
   /// subscribe / notification routing are wired inside — hosts do not need
