@@ -1,3 +1,31 @@
+## 0.1.8 - 2026-06-10 - Extension transport connection seam (additive)
+
+### Added
+- `AppPlayerCoreService.connectExtensionTransport({id, transport})` — new
+  public method that lets a host app connect to an external MCP server over a
+  host-supplied extension transport (serial / usb / ble / tcp / ws) without
+  adding the transport's FFI / platform dependencies to `appplayer_core`. The
+  transport is built by the calling app (e.g. using classes exported from
+  `mcp_bridge`) and injected here; the core routes it through
+  `McpClientKernelHost.connectWith` (brain_kernel 0.1.2). Returns a
+  `KernelClientConnection` whose `callTool` / `readResource` / `listTools`
+  reach the remote server. Throws `StateError` when the kernel is not booted.
+  See `specs/platform/08-extension.md` §4.
+
+### Changed (dependency floor)
+- `brain_kernel` `^0.1.1` → `^0.1.2` — `connectExtensionTransport` delegates
+  to `McpClientKernelHost.connectWith` and re-exports `clientTools`, both new
+  in brain_kernel 0.1.2. The floor guarantees these symbols are present.
+
+### Backward compatibility
+- Fully additive. No existing `AppPlayerCoreService` method or constructor
+  changed. Apps that do not use extension transports see no behavior change.
+
+### Tests
+- 302/302 (301 + 1 skipped) PASS. `analyze` 0 issues.
+
+---
+
 ## 0.1.7 - 2026-06-01 - brain_kernel KernelApp + bundle session bridge integration + MCP serving
 
 - **BrainBridge removed** (phase D · 2026-05-24) — 451 lines + 6 facade wrappers + 2 tests dropped. `AppPlayerCoreService` now calls `KernelApp.boot(...)` directly, registers `standardTools(app)`, and delegates `setActiveBundle` / `scopeIdFor`. Zero external-shell cascade.

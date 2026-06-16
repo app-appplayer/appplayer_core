@@ -38,6 +38,22 @@ void main() {
       await core.dispose();
     });
 
+    test('TC-CORE-021: mcp.* client tools registered on the dispatcher',
+        () async {
+      final core = _testCore();
+      await core.initialize(
+        storage: InMemoryServerStorage(),
+        bundleInstallRoot: '/tmp/core-test-bundles',
+      );
+      final names = core.toolDispatcherForInternals.inProcessToolNames;
+      // bk.* present ⇒ the kernel booted; mcp.* present ⇒ the mcp_client
+      // capability (app-driven outbound) is wired through the same path.
+      expect(names.any((n) => n.startsWith('bk.')), isTrue);
+      expect(names, contains('mcp.connect'));
+      expect(names, contains('mcp.call_tool'));
+      await core.dispose();
+    });
+
     test('TC-CORE-002: double initialize throws', () async {
       final core = _testCore();
       await core.initialize(storage: InMemoryServerStorage(), bundleInstallRoot: '/tmp/core-test-bundles');

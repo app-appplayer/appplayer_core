@@ -17,7 +17,13 @@ import 'package:brain_kernel/brain_kernel.dart'
         DispatchSession,
         InMemoryKvStoragePort,
         KernelApp,
+        KernelClientConnection,
+        clientTools,
         standardTools;
+// `McpClientKernelHost` (the outbound mcp_client surface the `mcp.*`
+// tools drive) lives outside the main barrel.
+import 'package:brain_kernel/mcp_host.dart' show McpClientKernelHost;
+import 'package:mcp_client/mcp_client.dart' show ClientTransport;
 import '../bundle/bundle_application_adapter.dart';
 import '../js/atom_category.dart';
 import '../js/atoms/agent_atom.dart';
@@ -118,6 +124,9 @@ class AppPlayerCoreService {
   late final String _bundleInstallRoot;
   late final SettingsStore _settingsStore;
   KernelApp? _kernel;
+  // Typed handle to the booted client host so the extension-transport seam
+  // (`connectWith`) is reachable — `_kernel.clientHost` is the abstract type.
+  McpClientKernelHost? _clientHost;
   BundleSessionBridge? _bridge;
   final Map<String, DispatchSession> _sessions =
       <String, DispatchSession>{};
@@ -129,6 +138,29 @@ class AppPlayerCoreService {
   /// dispose); only regression suites inspect this directly.
   @visibleForTesting
   bool get isKernelBooted => _kernel != null;
+
+  /// Connect to an external MCP server (e.g. an embedded board) over a
+  /// host-supplied **extension transport** (serial / usb / ble / tcp / ws),
+  /// injected through the kernel seam (`McpClientKernelHost.connectWith`).
+  ///
+  /// The transport is built outside the core (e.g. by `mcp_bridge`, the opt-in
+  /// FFI home) and must already be opened; appplayer_core itself stays free of
+  /// the transport's platform / FFI dependencies — the calling app owns those.
+  /// Returns a connection whose `callTool` / `readResource` / `listTools`
+  /// reach the remote server (e.g. `led.set`, `ui://app`).
+  /// See `specs/platform/08-extension.md` §4.
+  Future<KernelClientConnection> connectExtensionTransport({
+    required String id,
+    required ClientTransport transport,
+  }) async {
+    final host = _clientHost;
+    if (host == null) {
+      throw StateError(
+        'AppPlayer kernel is not booted — no client host for connectWith',
+      );
+    }
+    return host.connectWith(id: id, transport: transport);
+  }
 
   /// Test-only — whether the bundle session bridge is booted. Pairs
   /// with [isKernelBooted] for the wiring regression suite.
@@ -281,12 +313,26 @@ class AppPlayerCoreService {
         // Co-locate the BM25 retrieval store with the bundle install
         // root so it is cleaned up alongside the bundles themselves.
         bundleRegistryStorageDir: bundleInstallRoot,
+        // Outbound MCP client surface the `mcp.*` tools drive. Holds no
+        // connection until an app calls `mcp.connect`, so booting with it
+        // is free for apps that never reach out. Separate from the UI's
+        // `ConnectionManager` (user-configured server list) by design —
+        // these are app-driven programmatic connections.
+        clientHost: _clientHost = McpClientKernelHost(),
       );
       // Register the standard tool surface (knowledge-operations.md §5
       // Layer 2) with the in-process dispatcher. Adapt the kernel
       // handler type (`Future<Object?>`) into the dispatcher's
       // `Future<dynamic>` typedef.
       final tools = standardTools(_kernel!);
+      // `mcp.*` (mcp_client as host tools, app-driven) shares the exact
+      // same shape (`InProcessToolHandler`), so it registers through the
+      // same adapt loop. Only present because the kernel booted with a
+      // `clientHost`.
+      final clientHost = _kernel!.clientHost;
+      if (clientHost != null) {
+        tools.addAll(clientTools(clientHost));
+      }
       final adapted = <String, Future<dynamic> Function(Map<String, dynamic>)>{};
       for (final entry in tools.entries) {
         adapted[entry.key] = (Map<String, dynamic> args) async {
