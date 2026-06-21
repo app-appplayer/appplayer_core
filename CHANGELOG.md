@@ -1,3 +1,13 @@
+## 0.1.9 - 2026-06-22 - Capability tools registration seam (additive)
+
+### Added
+- `AppPlayerCoreService.registerCapabilityTools(tools)` — additive public seam
+  to register host-supplied in-process capability tools (e.g. a desktop `io.*`
+  process/device tool-pack) after boot. The core depends on no capability
+  package, so platform-specific adapters (`dart:io` process execution, etc.)
+  stay in the host layer; the tools share the same in-process dispatcher as the
+  standard `bk.*` / `mcp.*` surface. Safe to call more than once.
+
 ## 0.1.8 - 2026-06-10 - Extension transport connection seam (additive)
 
 ### Added

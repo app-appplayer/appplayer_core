@@ -162,6 +162,26 @@ class AppPlayerCoreService {
     return host.connectWith(id: id, transport: transport);
   }
 
+  /// Register additional in-process capability tools after boot — e.g. a
+  /// desktop io / device tool-pack (`io.*`). Host-injected and opt-in: the
+  /// core depends on no capability package, so platform-specific adapters
+  /// (e.g. `dart:io` process execution) stay in the host layer. The tools
+  /// share the same in-process dispatcher as the standard `bk.*` / `mcp.*`
+  /// surface, so agents call them identically. Additive — safe to call more
+  /// than once.
+  void registerCapabilityTools(
+    Map<String, Future<Object?> Function(Map<String, dynamic>)> tools,
+  ) {
+    _assertReady();
+    final adapted =
+        <String, Future<dynamic> Function(Map<String, dynamic>)>{};
+    for (final entry in tools.entries) {
+      adapted[entry.key] =
+          (Map<String, dynamic> args) async => entry.value(args);
+    }
+    _toolDispatcher.registerInProcessTools(adapted);
+  }
+
   /// Test-only — whether the bundle session bridge is booted. Pairs
   /// with [isKernelBooted] for the wiring regression suite.
   @visibleForTesting
