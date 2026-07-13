@@ -21,8 +21,10 @@ import 'package:brain_kernel/brain_kernel.dart'
         clientTools,
         standardTools;
 // `McpClientKernelHost` (the outbound mcp_client surface the `mcp.*`
-// tools drive) lives outside the main barrel.
-import 'package:brain_kernel/mcp_host.dart' show McpClientKernelHost;
+// tools drive) and the `connectExtension` seam helper (spec 08 §4) live
+// outside the main barrel.
+import 'package:brain_kernel/mcp_host.dart'
+    show McpClientKernelHost, connectExtension;
 import 'package:mcp_client/mcp_client.dart' show ClientTransport;
 import '../bundle/bundle_application_adapter.dart';
 import '../js/atom_category.dart';
@@ -124,9 +126,6 @@ class AppPlayerCoreService {
   late final String _bundleInstallRoot;
   late final SettingsStore _settingsStore;
   KernelApp? _kernel;
-  // Typed handle to the booted client host so the extension-transport seam
-  // (`connectWith`) is reachable — `_kernel.clientHost` is the abstract type.
-  McpClientKernelHost? _clientHost;
   BundleSessionBridge? _bridge;
   final Map<String, DispatchSession> _sessions =
       <String, DispatchSession>{};
@@ -149,18 +148,15 @@ class AppPlayerCoreService {
   /// Returns a connection whose `callTool` / `readResource` / `listTools`
   /// reach the remote server (e.g. `led.set`, `ui://app`).
   /// See `specs/platform/08-extension.md` §4.
+  ///
+  /// The seam is resolved off the abstract `KernelClientHost` via the
+  /// canonical [connectExtension] helper (spec 08 §4) — no concrete
+  /// client-host reference is held.
   Future<KernelClientConnection> connectExtensionTransport({
     required String id,
     required ClientTransport transport,
-  }) async {
-    final host = _clientHost;
-    if (host == null) {
-      throw StateError(
-        'AppPlayer kernel is not booted — no client host for connectWith',
-      );
-    }
-    return host.connectWith(id: id, transport: transport);
-  }
+  }) =>
+      connectExtension(_kernel?.clientHost, id: id, transport: transport);
 
   /// Register additional in-process capability tools after boot — e.g. a
   /// desktop io / device tool-pack (`io.*`). Host-injected and opt-in: the
@@ -338,7 +334,7 @@ class AppPlayerCoreService {
         // is free for apps that never reach out. Separate from the UI's
         // `ConnectionManager` (user-configured server list) by design —
         // these are app-driven programmatic connections.
-        clientHost: _clientHost = McpClientKernelHost(),
+        clientHost: McpClientKernelHost(),
       );
       // Register the standard tool surface (knowledge-operations.md §5
       // Layer 2) with the in-process dispatcher. Adapt the kernel
@@ -829,24 +825,47 @@ class AppPlayerCoreService {
   }
 
   // Bundle install lifecycle (FR-INSTALL-001~005).
-  Future<InstalledAppBundle> installBundleFromFile(String filePath) {
+  //
+  // Every install/uninstall invalidates the bundle's cached runtime +
+  // metadata: `_openFromBundleImpl` reuses an already-initialized runtime for
+  // the same bundle id (`if (!runtime.isInitialized)`), so without this a
+  // reinstall/update kept rendering the OLD definition for the rest of the
+  // session (fresh only after an app restart).
+  Future<InstalledAppBundle> installBundleFromFile(String filePath) async {
     _assertReady();
-    return _bundleInstaller.installFile(filePath);
+    final installed = await _bundleInstaller.installFile(filePath);
+    await _invalidateBundleCaches(installed.id);
+    return installed;
   }
 
-  Future<InstalledAppBundle> installBundleFromDirectory(String mbdPath) {
+  Future<InstalledAppBundle> installBundleFromDirectory(String mbdPath) async {
     _assertReady();
-    return _bundleInstaller.installDirectory(mbdPath);
+    final installed = await _bundleInstaller.installDirectory(mbdPath);
+    await _invalidateBundleCaches(installed.id);
+    return installed;
   }
 
-  Future<InstalledAppBundle> installBundleFromUrl(Uri url) {
+  Future<InstalledAppBundle> installBundleFromUrl(Uri url) async {
     _assertReady();
-    return _bundleInstaller.installUrl(url);
+    final installed = await _bundleInstaller.installUrl(url);
+    await _invalidateBundleCaches(installed.id);
+    return installed;
   }
 
-  Future<void> uninstallBundle(String bundleId) {
+  Future<void> uninstallBundle(String bundleId) async {
     _assertReady();
-    return _bundleInstaller.uninstall(bundleId);
+    await _bundleInstaller.uninstall(bundleId);
+    await _invalidateBundleCaches(bundleId);
+  }
+
+  /// Drop the session-scoped runtime + metadata cached for [bundleId] so the
+  /// next open re-initializes from the bundle now on disk.
+  Future<void> _invalidateBundleCaches(String bundleId) async {
+    final handle = AppHandle.bundle(bundleId);
+    if (_runtime.hasRuntime(handle)) {
+      await _runtime.removeRuntime(handle);
+    }
+    _metadataCache.remove(handle);
   }
 
   Future<List<InstalledAppBundle>> listInstalledBundles() {

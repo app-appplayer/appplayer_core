@@ -131,6 +131,54 @@ void main() {
     expect(entry!.name, _bundleName,
         reason: 'metadata sink should overwrite id-as-name with manifest name');
   });
+
+  test(
+      'reinstall/uninstall invalidates the cached bundle runtime — without '
+      'this a session kept rendering the OLD definition after an update '
+      '(fresh only on app restart)', () async {
+    final mbdPath = _resolveMbd();
+    final tmp = await Directory.systemTemp
+        .createTemp('appplayer-bundle-reinstall-test-');
+    addTearDown(() async {
+      if (await tmp.exists()) await tmp.delete(recursive: true);
+    });
+
+    final core = AppPlayerCoreService();
+    await core.initialize(
+      storage: InMemoryServerStorage(),
+      bundleInstallRoot: tmp.path,
+    );
+    addTearDown(() async => core.dispose());
+
+    final installed = await core.installBundleFromDirectory(mbdPath);
+
+    // Open once so the runtime lands in the session cache (runtime-engine
+    // init may fail in the test binding; the runtime is registered by
+    // getOrCreateRuntime before that step, which is what matters here).
+    try {
+      final session =
+          await core.openAppFromBundle(BundleInstalledRef(installed.id));
+      await session.close();
+    } catch (_) {}
+
+    if (core.isBundleLoaded(installed.id)) {
+      // Reinstall (update path) must drop the cached runtime so the next
+      // open re-initializes from the bundle now on disk.
+      await core.installBundleFromDirectory(mbdPath);
+      expect(core.isBundleLoaded(installed.id), isFalse,
+          reason: 'reinstall must invalidate the cached runtime');
+
+      // Re-open + uninstall must drop it too.
+      try {
+        final session =
+            await core.openAppFromBundle(BundleInstalledRef(installed.id));
+        await session.close();
+      } catch (_) {}
+    }
+    await core.uninstallBundle(installed.id);
+    expect(core.isBundleLoaded(installed.id), isFalse,
+        reason: 'uninstall must invalidate the cached runtime');
+  });
 }
 
 String _resolveMbd() {

@@ -1,3 +1,28 @@
+## 0.1.11 - 2026-07-13 - Marketplace connect credential + bundle cache invalidation
+
+### Fixed
+- streamableHttp transport carries `accessToken` as `Authorization: Bearer`
+  (+ `headers` passthrough, explicit header wins); it was dropped entirely, so
+  token-gated servers rejected the handshake (401 → "Transport disconnected").
+- install/uninstall invalidate the bundle's session runtime + metadata caches
+  (FR-INSTALL-009) — a reinstall/update no longer keeps rendering the old
+  definition until app restart.
+
+### Changed
+- Floor `mcp_client ^2.0.1` (spec-optional `description` parse fix).
+
+## 0.1.10 - 2026-07-12 - Extension-transport seam conformance (additive)
+
+### Changed
+- `AppPlayerCoreService.connectExtensionTransport` now delegates to the
+  `brain_kernel` core `connectExtension(clientHost, …)` helper off the abstract
+  `KernelClientHost`, dropping the redundant concrete `McpClientKernelHost`
+  field/ref and the inline probe-and-cast (the `is`-no-promotion footgun is now
+  sealed inside the kernel helper). Behaviour unchanged.
+- Floors `brain_kernel ^0.1.2 → ^0.1.7` (the `ExtensionTransportConnect`
+  capability interface + `connectExtension` helper, spec 08 §4 Standard 3
+  Layers). No API change to appplayer_core's own surface.
+
 ## 0.1.9 - 2026-06-22 - Capability tools registration seam (additive)
 
 ### Added

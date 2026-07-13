@@ -55,8 +55,23 @@ class TransportFactory {
           );
         }
         final timeoutSeconds = cfg['timeout'] as int?;
+        // Credential wiring. `accessToken` rides the MCP-standard
+        // `Authorization: Bearer` header (mirrors the sse branch's
+        // bearerToken); `headers` passes through verbatim for servers with a
+        // bespoke scheme, and an explicit header wins over the derived one.
+        // Dropping the token here was the marketplace service-connect 401
+        // (server rejected the unauthenticated handshake → "Transport
+        // disconnected").
+        final accessToken = cfg['accessToken'] as String?;
+        final extraHeaders =
+            (cfg['headers'] as Map<dynamic, dynamic>?)?.cast<String, String>();
+        final headers = <String, String>{
+          if (accessToken != null) 'Authorization': 'Bearer $accessToken',
+          ...?extraHeaders,
+        };
         return TransportConfig.streamableHttp(
           baseUrl: baseUrl,
+          headers: headers.isEmpty ? null : headers,
           useHttp2: cfg['useHttp2'] as bool? ?? true,
           timeout: timeoutSeconds != null
               ? Duration(seconds: timeoutSeconds)

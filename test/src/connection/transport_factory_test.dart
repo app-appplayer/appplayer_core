@@ -80,6 +80,46 @@ void main() {
       expect(s.terminateOnClose, false);
     });
 
+    test(
+        'TC-TRANS-007: streamableHttp carries accessToken as Authorization '
+        'Bearer (dropping it = unauthenticated handshake → the marketplace '
+        'service-connect 401)', () {
+      final result = factory.create(_cfg(
+        type: TransportType.streamableHttp,
+        config: const {
+          'baseUrl': 'https://api/mcp',
+          'accessToken': 'tok-123',
+        },
+      ));
+      final s = result as StreamableHttpTransportConfig;
+      expect(s.headers, {'Authorization': 'Bearer tok-123'});
+    });
+
+    test(
+        'TC-TRANS-008: streamableHttp headers pass through and an explicit '
+        'header wins over the token-derived one', () {
+      final result = factory.create(_cfg(
+        type: TransportType.streamableHttp,
+        config: const {
+          'baseUrl': 'https://api/mcp',
+          'accessToken': 'tok-123',
+          'headers': {'X-API-Key': 'tok-123', 'Authorization': 'Custom x'},
+        },
+      ));
+      final s = result as StreamableHttpTransportConfig;
+      expect(s.headers, {
+        'Authorization': 'Custom x',
+        'X-API-Key': 'tok-123',
+      });
+
+      // No token, no headers → null (unchanged behaviour).
+      final bare = factory.create(_cfg(
+        type: TransportType.streamableHttp,
+        config: const {'baseUrl': 'https://api/mcp'},
+      )) as StreamableHttpTransportConfig;
+      expect(bare.headers, isNull);
+    });
+
     test('TC-TRANS-005: missing required field throws ArgumentError', () {
       expect(
         () => factory.create(_cfg(
