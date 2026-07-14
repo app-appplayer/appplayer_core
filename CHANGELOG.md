@@ -1,3 +1,21 @@
+## 0.1.12 - 2026-07-14 - Theme state rebuilt on every app entry
+
+### Fixed
+- `AppSession.buildWidget` / `buildDashboardWidget` rebuild the theme state on
+  every entry: the runtime's ThemeManager is a process-wide singleton, so the
+  previous app's palette/mode leaks into the next one and any runtime widget's
+  dispose clears the brightness pin. Entry now applies the app's own declared
+  theme — or a SYSTEM BASELINE with real light AND dark token sets — whenever
+  ownership changes hands, then re-pins the current host brightness. The bare
+  `defaultLight()` default has no dark tokens, which is why undeclared apps
+  rendered "weird dark" on first entry until another app left a full palette
+  behind in the singleton.
+- The rebaseline skip-gate verifies the singleton's FINGERPRINT (not just an
+  ownership tag): runtime teardown resets the ThemeManager behind the
+  session's back (`MCPUIRuntime.destroy` → `reset()`), so a stale tag made
+  same-app re-entry skip over the bare default — re-open of the same app
+  rendered weird while a detour through another app healed it.
+
 ## 0.1.11 - 2026-07-13 - Marketplace connect credential + bundle cache invalidation
 
 ### Fixed

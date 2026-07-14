@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
+import 'package:flutter_mcp_ui_core/flutter_mcp_ui_core.dart'
+    show ThemeDefinition;
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
 import 'package:mcp_bundle/mcp_bundle.dart' show McpBundle;
 import 'package:mcp_client/mcp_client.dart' hide Logger;
@@ -74,11 +76,70 @@ class AppSessionImpl implements AppSession {
       ? _conn.connections[handle.key]?.client
       : null;
 
+  /// System baseline theme — REAL light AND dark token sets. An app that
+  /// declares no theme must render on this, not on the runtime's bare
+  /// `defaultLight()`: that default has no dark tokens, so a dark host pin
+  /// over it produced the "weird dark" first entry (and entering a
+  /// theme-declaring app like UI Showcase "fixed" it only by leaving its
+  /// palette behind in the process-wide singleton).
+  static final ThemeDefinition _systemBaselineTheme = ThemeDefinition.fromJson({
+    ...ThemeDefinition.defaultLight().toJson(),
+    'mode': 'system',
+    'dark': ThemeDefinition.defaultDark().toJson(),
+  });
+
+  /// Which app currently owns the shared ThemeManager state — the runtime's
+  /// ThemeManager is a process-wide singleton, so whatever the previous app
+  /// applied leaks into the next one unless rebuilt on entry.
+  static String? _themeStateOwner;
+
+  /// Fingerprint of the singleton state as WE last applied it. The owner tag
+  /// alone is not enough: runtime teardown paths reset the singleton behind
+  /// the session's back (`MCPUIRuntime.destroy` → `ThemeManager.reset()`)
+  /// without any host hook, so a same-app re-entry with a stale tag skipped
+  /// rebaseline over the bare default (live: "same-app re-open weird,
+  /// other-app detour normal"). The fingerprint embeds the theme-data map's
+  /// identity hash — ANY external mutation invalidates the skip.
+  static String? _themeAppliedFingerprint;
+
+  /// Rebuild the theme state for THIS app on every entry/build.
+  ///
+  /// One-shot setup is not reliable (singleton residue + dispose clears the
+  /// brightness pin), so entry is deterministic: the app's own declared
+  /// theme — or the system baseline — is applied whenever ownership changed
+  /// hands, and the CURRENT host brightness is re-pinned every time.
+  void _rebaselineTheme() {
+    final tm = _runtime.engine.themeManager;
+    final owner = handle.toString();
+    // Skip only when the singleton state is PROVABLY still ours: same owner
+    // AND untouched fingerprint. A destroy/reset anywhere flips the
+    // fingerprint, forcing a fresh apply.
+    final intact = _themeStateOwner == owner &&
+        _themeAppliedFingerprint == tm.fingerprint;
+    if (!intact) {
+      final own = _runtime.engine.applicationDefinition?.theme;
+      if (own != null) {
+        tm.setTheme(own);
+      } else {
+        tm.setThemeDefinition(_systemBaselineTheme);
+      }
+      _themeStateOwner = owner;
+      _logger.debug('session.theme.rebaseline', {
+        'handle': owner,
+        'declared': own != null,
+      });
+    }
+    final feed = hostBrightness;
+    if (feed != null) tm.setHostBrightness(feed.value);
+    _themeAppliedFingerprint = tm.fingerprint;
+  }
+
   @override
   Widget buildWidget({
     required BuildContext context,
     VoidCallback? onExit,
   }) {
+    _rebaselineTheme();
     return _runtime.buildUI(
       context: context,
       onToolCall: _onToolCall,
@@ -95,6 +156,7 @@ class AppSessionImpl implements AppSession {
     VoidCallback? onExit,
     void Function(String? appId, String? route)? onOpenApp,
   }) {
+    _rebaselineTheme();
     return _runtime.buildDashboard(
       context: context,
       onToolCall: _onToolCall,
@@ -156,6 +218,12 @@ class AppSessionImpl implements AppSession {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    // Runtime teardown fully resets the process-wide ThemeManager
+    // (MCPUIRuntime.destroy → ThemeManager.instance.reset()), so the theme
+    // ownership tag must drop with it — otherwise a SAME-app re-entry skips
+    // rebaseline over the bare default (live pattern: re-open of the same
+    // app broken, detour through another app healed).
+    if (_themeStateOwner == handle.toString()) _themeStateOwner = null;
     final client = _client;
     if (client != null) {
       await _subs.unsubscribeAllFor(

@@ -464,6 +464,14 @@ class AppPlayerCoreService {
       // MCP Serving bundle-document detection (avoids a redundant round-trip).
       final resources = await client.listResources();
       final definition = await _appLoader.load(client, resources: resources);
+      _logger.debug('server.open.first', {
+        'serverId': serverId,
+        'metadata': metadata != null,
+        'resources': resources.length,
+        'defKeys': definition.keys.take(8).join(','),
+        'hasTheme': definition['theme'] != null ||
+            (definition['runtime'] as Map?)?['services']?['theme'] != null,
+      });
       await runtime.initialize(
         definition,
         pageLoader: _appLoader.pageLoaderFor(client),

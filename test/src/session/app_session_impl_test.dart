@@ -2,6 +2,9 @@ import 'package:appplayer_core/internals.dart';
 import 'package:appplayer_core/src/logging/logger.dart';
 import 'package:appplayer_core/src/session/app_handle.dart';
 import 'package:appplayer_core/src/session/app_session_impl.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
+    show MCPUIRuntime;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_bundle/mcp_bundle.dart' as mb;
 
@@ -28,6 +31,57 @@ AppSessionImpl _session({
 }
 
 void main() {
+  group('AppSessionImpl — host brightness re-injection', () {
+    testWidgets(
+        'buildWidget re-injects the CURRENT host brightness on every entry — '
+        'the runtime ThemeManager is a process-wide singleton and another '
+        'widget\'s dispose clears the pin, so one-shot setup left the next '
+        'app entry rendering light content in dark mode', (tester) async {
+      final feed = ValueNotifier<Brightness>(Brightness.dark);
+      final runtime = MCPUIRuntime();
+      addTearDown(() {
+        runtime.engine.themeManager.setHostBrightness(null);
+        feed.dispose();
+      });
+      final s = AppSessionImpl(
+        handle: const AppHandle.bundle('com.example.theme'),
+        runtime: runtime,
+        conn: ConnectionManager(),
+        runtimeManager: RuntimeManager(),
+        toolDispatcher: ToolDispatcher(),
+        resourceSubscriber: ResourceSubscriber(),
+        logger: NoopLogger(),
+        hostBrightness: feed,
+      );
+
+      late BuildContext ctx;
+      await tester.pumpWidget(
+        Builder(builder: (c) {
+          ctx = c;
+          return const SizedBox();
+        }),
+      );
+
+      // Leftover state: some other runtime widget's dispose cleared the
+      // global pin after the previous app closed.
+      runtime.engine.themeManager.setHostBrightness(null);
+      expect(runtime.engine.themeManager.flutterThemeMode,
+          isNot(ThemeMode.dark));
+
+      // Entering the app must re-pin from the live feed BEFORE building —
+      // even though the runtime itself is uninitialized (throws after the
+      // re-injection step).
+      try {
+        s.buildWidget(context: ctx);
+      } on StateError {
+        // expected — runtime not initialized in this harness
+      }
+      expect(runtime.engine.themeManager.flutterThemeMode, ThemeMode.dark,
+          reason: 'entry must push the current brightness, not trust '
+              'whatever a previous mount left behind');
+    });
+  });
+
   group('AppSessionImpl — accessor surface', () {
     test('handle / source / bundle / metadata round-trip', () {
       const handle = AppHandle.bundle('com.example.x');
