@@ -120,5 +120,68 @@ void main() {
       final page = await fn('ui://page/2');
       expect(page, isEmpty);
     });
+
+    test('TC-APPLOAD-012: bare page is promoted to a single-route '
+        'application pointing at appUri, lifting the page title', () {
+      final wrapped = loader.wrapAsApplication(
+        const {
+          'type': 'page',
+          'title': 'ESP32 BLE MCP Node',
+          'content': {'type': 'column', 'children': []},
+        },
+        appUri: 'ui://app',
+      );
+      expect(wrapped['type'], 'application');
+      // Title is carried from the page so a board that serves no
+      // ui://app/info metadata still names the app from its own structure.
+      expect(wrapped['title'], 'ESP32 BLE MCP Node');
+      expect(wrapped['routes'], {'/': 'ui://app'});
+      expect(wrapped['initialRoute'], '/');
+    });
+
+    test('TC-APPLOAD-013: an untyped single UI is also promoted', () {
+      final wrapped = loader.wrapAsApplication(
+        const {'content': {'type': 'text', 'value': 'hi'}},
+        appUri: 'ui://app',
+      );
+      expect(wrapped['type'], 'application');
+      expect(wrapped['routes'], {'/': 'ui://app'});
+      // No page title → no application title key (runtime supplies a default).
+      expect(wrapped.containsKey('title'), isFalse);
+    });
+
+    test('TC-APPLOAD-015: cachingPageLoaderFor serves the cached page from '
+        'memory without touching the client', () async {
+      final fn = loader.cachingPageLoaderFor(client, {
+        'ui://app': const {'type': 'page', 'title': 'Board'},
+      });
+      final page = await fn('ui://app');
+      expect(page['title'], 'Board');
+      // The initial page must render without a second read over the link.
+      verifyNever(() => client.readResource('ui://app'));
+    });
+
+    test('TC-APPLOAD-016: cachingPageLoaderFor falls back to the client for '
+        'an uncached uri', () async {
+      when(() => client.readResource('ui://other'))
+          .thenAnswer((_) async => _readResult('{"type":"page"}'));
+      final fn = loader.cachingPageLoaderFor(client, {
+        'ui://app': const {'type': 'page'},
+      });
+      final page = await fn('ui://other');
+      expect(page['type'], 'page');
+      verify(() => client.readResource('ui://other')).called(1);
+    });
+
+    test('TC-APPLOAD-014: an application document passes through unchanged',
+        () {
+      const appDef = {
+        'type': 'application',
+        'title': 'Already An App',
+        'routes': {'/': 'ui://home', '/settings': 'ui://settings'},
+      };
+      final wrapped = loader.wrapAsApplication(appDef, appUri: 'ui://home');
+      expect(identical(wrapped, appDef), isTrue);
+    });
   });
 }

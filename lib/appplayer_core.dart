@@ -97,5 +97,21 @@ export 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
 // storage and injects it through `initialize(settingsStore: ...)`.
 export 'src/settings/settings_store.dart';
 
+// Platform integration foundation (FR-PLATFORM) — lifecycle, background
+// execution, continuity, scheduling, OS permissions, per-app capability
+// consent, and notifications. Hosts inject the shell-provided seams
+// (ConsentPrompt, ConsentStore, BackgroundPolicy); NoOp implementations
+// keep pure-Dart hosts working without native support.
+// See `docs/03_DDD/platform-integration-foundation.md`.
+export 'src/lifecycle/lifecycle_coordinator.dart';
+export 'src/background/background_policy.dart';
+export 'src/background/background_execution_port.dart';
+export 'src/connection/continuity_controller.dart';
+export 'src/schedule/job_scheduler.dart';
+export 'src/permission/platform_permission_port.dart';
+export 'src/capability/app_capability.dart';
+export 'src/capability/capability_consent_manager.dart';
+export 'src/notification/notification_port.dart';
+
 // Exceptions
 export 'src/exceptions.dart';

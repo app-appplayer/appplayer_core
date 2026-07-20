@@ -22,7 +22,7 @@ class _FakeTenantSource implements TenantSource {
 }
 
 AppPlayerCoreService _testCore() =>
-    AppPlayerCoreService.forTesting(connector: (_) async => MockClient());
+    AppPlayerCoreService.forTesting(connector: (_) async => mockClient());
 
 void main() {
   setUpAll(() {
@@ -148,6 +148,70 @@ void main() {
       await core.initialize(storage: storage, bundleInstallRoot: '/tmp/core-test-bundles');
       await expectLater(
         core.openAppFromServer('s1'),
+        throwsA(isA<ConnectionFailedException>()),
+      );
+      await core.dispose();
+    });
+
+    test('TC-CORE-022: fetchServerMetadata unknown server throws', () async {
+      final core = _testCore();
+      await core.initialize(
+          storage: InMemoryServerStorage(),
+          bundleInstallRoot: '/tmp/core-test-bundles');
+      await expectLater(
+        core.fetchServerMetadata('nope'),
+        throwsA(isA<ServerNotFoundException>()),
+      );
+      await core.dispose();
+    });
+
+    test('TC-CORE-023: fetchServerMetadata reads ui://app/info metadata-only '
+        '(no UI load, no runtime)', () async {
+      final storage = InMemoryServerStorage();
+      await storage.saveServer(_server('s1'));
+      final client = mockClient();
+      when(() => client.listResources()).thenAnswer((_) async => [
+            Resource(uri: 'ui://app/info', name: 'info', description: ''),
+            Resource(uri: 'ui://app', name: 'app', description: ''),
+          ]);
+      when(() => client.readResource('ui://app/info')).thenAnswer(
+        (_) async => const ReadResourceResult(contents: [
+          ResourceContentInfo(
+            uri: 'ui://app/info',
+            mimeType: 'application/json',
+            text: '{"name":"Cool Svc","version":"1.2.0"}',
+          ),
+        ]),
+      );
+      when(() => client.disconnect()).thenReturn(null);
+      final core =
+          AppPlayerCoreService.forTesting(connector: (_) async => client);
+      await core.initialize(
+          storage: storage, bundleInstallRoot: '/tmp/core-test-bundles');
+
+      final metadata = await core.fetchServerMetadata('s1');
+      expect(metadata, isNotNull);
+      expect(metadata!.name, 'Cool Svc');
+      expect(metadata.version, '1.2.0');
+      // Metadata-only: the app UI resource is never read (no runtime built).
+      verifyNever(() => client.readResource('ui://app'));
+      // Install is metadata-only: the connection is closed after the read,
+      // not left warm — the real open reconnects.
+      verify(() => client.disconnect()).called(1);
+      await core.dispose();
+    });
+
+    test('TC-CORE-024: fetchServerMetadata connection failure propagates',
+        () async {
+      final storage = InMemoryServerStorage();
+      await storage.saveServer(_server('s1'));
+      final core = AppPlayerCoreService.forTesting(
+        connector: (_) async => throw StateError('cannot connect'),
+      );
+      await core.initialize(
+          storage: storage, bundleInstallRoot: '/tmp/core-test-bundles');
+      await expectLater(
+        core.fetchServerMetadata('s1'),
         throwsA(isA<ConnectionFailedException>()),
       );
       await core.dispose();

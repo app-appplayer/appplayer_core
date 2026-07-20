@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState;
 
 import '../model/server_config.dart';
@@ -26,6 +28,11 @@ class ConnectionInfo {
   Client? client;
   DateTime? connectedAt;
   String? error;
+
+  /// Subscription to the client's `onDisconnect` stream. Held so the manager
+  /// can react to a transport that drops on its own (BLE supervision timeout,
+  /// server close) and can cancel the listener on an explicit disconnect.
+  StreamSubscription<DisconnectReason>? disconnectSub;
 
   bool get isHealthy =>
       state == ConnectionState.connected && client != null;

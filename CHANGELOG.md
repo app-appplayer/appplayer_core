@@ -1,3 +1,33 @@
+## 0.1.13 - 2026-07-18 - Flutter-plugin promotion · metadata-only install · single-route apps · debug MCP · connection continuity
+
+Additive across the tracks landed since 0.1.12. `^0.1.12` consumers pick these
+up on floor-bump; no public API removed.
+
+### Added
+- **Flutter-plugin promotion (Platform Integration Foundation, FR-PLATFORM)** —
+  `appplayer_core` declares a `flutter: plugin:` with native Android/iOS
+  adapters (background execution, OS permission, notification); desktop/web
+  degrade to the Dart ports' NoOp. `onLifecyclePhase(AppLifecyclePhase)` drives
+  the foundation.
+- **Metadata-only install** — `fetchServerMetadata(serverId)` /
+  `fetchBundleMetadata(BundleRef)` read a card's name/icon WITHOUT rendering, so
+  install ≠ run (the launcher tile is populated, the UI loads on first open).
+- **Single-route application wrapping** — `AppLoader.wrapAsApplication(...)`
+  promotes a bare served page into a single-route application (app name = page
+  title), so a server app renders with the standard chrome (AppBar/Close) and no
+  separate metadata serving.
+- **Debug MCP host** — opt-in (`enableDebugMcp`, settings-gated, non-web) MCP
+  server on `127.0.0.1:<port>/mcp` exposing `ui.screenshot` / `ui.tree` /
+  `ui.tap` / `ui.type` for test automation; `debugCaptureWrap(child)` gives the
+  capture/tap primitives a stable render boundary.
+- **Connection continuity** — transport-drop handling (`_handleTransportDrop`
+  with `DisconnectReason`) + `keepAliveSweep(...)` for reconnect/resume.
+
+### Dependencies
+- Floors raised to current latest at cut time: `mcp_client ^2.1.0`,
+  `mcp_bundle ^0.4.8`, `flutter_mcp_ui_core ^0.4.1`,
+  `flutter_mcp_ui_runtime ^0.5.1`, `brain_kernel ^0.1.8`.
+
 ## 0.1.12 - 2026-07-14 - Theme state rebuilt on every app entry
 
 ### Fixed

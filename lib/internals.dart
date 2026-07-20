@@ -52,3 +52,10 @@ export 'src/js/js_tool_runtime.dart';
 export 'src/js/atoms/agent_atom.dart';
 export 'src/js/atoms/bundle_atom.dart';
 export 'src/js/atoms/mcp_atom.dart';
+
+// Debug MCP surface — desktop-only, settings-gated test-automation
+// endpoint (screenshot / tree / tap / type). Wired through
+// `AppPlayerCoreService.initialize(enableDebugMcp: ...)`; these types are
+// the underlying primitives for advanced hosts that drive them directly.
+export 'src/debug/debug_capture.dart';
+export 'src/debug/debug_mcp_host.dart';

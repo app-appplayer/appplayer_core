@@ -89,6 +89,16 @@ class ConnectionManager extends ChangeNotifier {
       info.client = client;
       info.state = ConnectionState.connected;
       info.connectedAt = DateTime.now();
+      // Liveness: when the transport drops on its own — BLE supervision
+      // timeout, a server closing the socket — mcp_client fires onDisconnect.
+      // Without reacting, this entry stays `connected` forever: the launcher
+      // badge stays lit and a retry reuses the dead client (readResource hangs
+      // on a link that is gone) instead of dialing again. React by dropping
+      // the entry so hasConnection()/isServerConnected() tell the truth and the
+      // next connect() starts fresh.
+      info.disconnectSub = client.onDisconnect.listen(
+        (reason) => _handleTransportDrop(server.id, reason),
+      );
       notifyListeners();
 
       _logger.info('Connected', {'serverId': server.id});
@@ -102,12 +112,80 @@ class ConnectionManager extends ChangeNotifier {
     }
   }
 
+  /// Transport dropped on its own (not an explicit [disconnect] call). Mark the
+  /// entry `error` and clear the dead client, but KEEP it in the map so:
+  ///   - `isServerConnected` reads false (state != connected) → the launcher
+  ///     badge clears and any open session's dynamic `client` getter goes null
+  ///     instead of dialing a corpse;
+  ///   - [ConnectionHealthMonitor] sees the `error` state and auto-reconnects,
+  ///     which is what lets a flaky link (e.g. the ESP32 BLE controller that
+  ///     hard-drops every ~45s) self-heal without the user reopening the app —
+  ///     a fresh client lands back under the same serverId and the session
+  ///     picks it up.
+  /// Removing the entry instead would hide it from the monitor and there would
+  /// be nothing to reconnect. Idempotent.
+  void _handleTransportDrop(String serverId, DisconnectReason reason) {
+    final info = _connections[serverId];
+    if (info == null) return;
+    info.disconnectSub?.cancel();
+    info.disconnectSub = null;
+    info.client = null;
+    info.state = ConnectionState.error;
+    info.error = 'transport dropped: $reason';
+    _logger.info('Transport dropped — marked for reconnect',
+        {'serverId': serverId, 'reason': reason.toString()});
+    notifyListeners();
+  }
+
+  /// Active keepalive + liveness for transient stream transports (ble:// /
+  /// tcp:// / serial:// carried on a streamableHttp config). Sends a cheap
+  /// `listResources` round-trip on every such CONNECTED link:
+  ///   - the traffic keeps the link warm — an idle BLE session to an ESP32
+  ///     drops in ~15s, but ~2-3s keepalive traffic stretches it to ~45s
+  ///     (measured), so far fewer reconnect cycles;
+  ///   - a probe that fails/times out means the link died silently, so the
+  ///     entry is marked error (via [_handleTransportDrop]) and the health
+  ///     monitor reconnects it.
+  /// HTTP/SSE/stdio servers are skipped — they don't suffer idle-drop and a
+  /// periodic poll would just be noise.
+  Future<void> keepAliveSweep({
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final targets = _connections.entries
+        .where((e) =>
+            e.value.state == ConnectionState.connected &&
+            e.value.client != null &&
+            _isTransientStream(e.value.serverConfig))
+        .toList();
+    for (final e in targets) {
+      final client = e.value.client!;
+      try {
+        await client.listResources().timeout(timeout);
+      } catch (_) {
+        _handleTransportDrop(e.key, DisconnectReason.transportError);
+      }
+    }
+  }
+
+  static bool _isTransientStream(ServerConfig server) {
+    if (server.transportType != TransportType.streamableHttp) return false;
+    final base = server.transportConfig['baseUrl'];
+    return base is String &&
+        (base.startsWith('ble://') ||
+            base.startsWith('tcp://') ||
+            base.startsWith('serial://'));
+  }
+
   /// FR-CONN-004
   Future<void> disconnect(String serverId) async {
     final info = _connections[serverId];
     if (info == null) return;
 
     _logger.debug('Disconnecting', {'serverId': serverId});
+    // Cancel the liveness listener first so tearing the client down does not
+    // re-enter _handleTransportDrop for a disconnect we are performing.
+    await info.disconnectSub?.cancel();
+    info.disconnectSub = null;
     try {
       info.client?.disconnect();
     } catch (e, st) {
@@ -123,6 +201,8 @@ class ConnectionManager extends ChangeNotifier {
   Future<void> disconnectAll() async {
     _logger.debug('Disconnecting all', {'count': _connections.length});
     for (final info in _connections.values) {
+      await info.disconnectSub?.cancel();
+      info.disconnectSub = null;
       try {
         info.client?.disconnect();
       } catch (e) {

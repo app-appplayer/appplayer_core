@@ -24,7 +24,7 @@ void main() {
 
   group('ConnectionManager (MOD-CONN-001)', () {
     test('TC-CONN-001: connect creates new entry', () async {
-      final client = MockClient();
+      final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
 
       final m = ConnectionManager(connector: (_) async => client);
@@ -35,9 +35,96 @@ void main() {
       expect(m.getConnection('s1')!.state, ConnectionState.connected);
     });
 
+    test('TC-CONN-013: a transport that drops on its own is marked error with '
+        'its dead client cleared (badge dark, health monitor can reconnect), '
+        'and reconnect dials fresh', () async {
+      // A client whose onDisconnect we control — simulate a BLE supervision
+      // timeout after a successful connect.
+      final drops = StreamController<DisconnectReason>.broadcast();
+      addTearDown(drops.close);
+      var connectCalls = 0;
+      final client = MockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.onDisconnect).thenAnswer((_) => drops.stream);
+
+      final m = ConnectionManager(connector: (_) async {
+        connectCalls++;
+        return client;
+      });
+
+      final ok = await m.connect(_server());
+      expect(ok.success, isTrue);
+      expect(m.getConnection('s1')!.state, ConnectionState.connected);
+
+      // Transport drops without an explicit disconnect() call.
+      drops.add(DisconnectReason.transportClosed);
+      await Future<void>.microtask(() {});
+
+      // Entry kept but marked error + dead client cleared: isServerConnected
+      // (state==connected) reads false so the badge clears and the session's
+      // client getter goes null; the entry stays so the health monitor can act.
+      final info = m.getConnection('s1')!;
+      expect(info.state, ConnectionState.error);
+      expect(info.client, isNull);
+
+      // reconnect() (what the health monitor calls) dials fresh under the same
+      // id — the new client replaces the corpse and a session picks it up.
+      final re = await m.reconnect('s1');
+      expect(re.success, isTrue);
+      expect(connectCalls, 2);
+      expect(m.getConnection('s1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-014: keepAliveSweep pings a transient ble:// link and marks '
+        'it error when the probe fails (health monitor then reconnects)',
+        () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      // First listResources (keepalive probe) throws → link is dead.
+      when(() => client.listResources())
+          .thenThrow(StateError('transport gone'));
+
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'ble1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'ble://AA:BB'},
+      ));
+      expect(m.getConnection('ble1')!.state, ConnectionState.connected);
+
+      await m.keepAliveSweep();
+
+      // Dead probe → marked error + client cleared, ready for reconnect.
+      expect(m.getConnection('ble1')!.state, ConnectionState.error);
+      expect(m.getConnection('ble1')!.client, isNull);
+    });
+
+    test('TC-CONN-015: keepAliveSweep skips plain http servers (no idle-drop, '
+        'no noise poll)', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.listResources()).thenAnswer((_) async => const []);
+
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'http1',
+        name: 'web',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'https://example.com/mcp'},
+      ));
+
+      await m.keepAliveSweep();
+
+      expect(m.getConnection('http1')!.state, ConnectionState.connected);
+      verifyNever(() => client.listResources());
+    });
+
     test('TC-CONN-002: connect reuses existing connected', () async {
       var calls = 0;
-      final client = MockClient();
+      final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
 
       final m = ConnectionManager(connector: (_) async {
@@ -50,7 +137,7 @@ void main() {
     });
 
     test('TC-CONN-003: connect awaits in-flight attempt', () async {
-      final client = MockClient();
+      final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
 
       // Gate the first connect to simulate in-flight.
@@ -92,7 +179,7 @@ void main() {
     // using FakeAsync for deterministic timing.
 
     test('TC-CONN-006: disconnect removes entry', () async {
-      final client = MockClient();
+      final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
       final m = ConnectionManager(connector: (_) async => client);
       await m.connect(_server());
@@ -102,14 +189,14 @@ void main() {
     });
 
     test('TC-CONN-007: disconnect unknown id is a no-op', () async {
-      final m = ConnectionManager(connector: (_) async => MockClient());
+      final m = ConnectionManager(connector: (_) async => mockClient());
       await m.disconnect('nope');
       expect(m.connections.isEmpty, isTrue);
     });
 
     test('TC-CONN-008: disconnectAll clears registry', () async {
       final m = ConnectionManager(connector: (_) async {
-        final c = MockClient();
+        final c = mockClient();
         when(() => c.disconnect()).thenReturn(null);
         return c;
       });
@@ -123,7 +210,7 @@ void main() {
       var calls = 0;
       final m = ConnectionManager(connector: (_) async {
         calls++;
-        final c = MockClient();
+        final c = mockClient();
         when(() => c.disconnect()).thenReturn(null);
         return c;
       });
@@ -134,7 +221,7 @@ void main() {
     });
 
     test('TC-CONN-010: reconnect unknown id failure', () async {
-      final m = ConnectionManager(connector: (_) async => MockClient());
+      final m = ConnectionManager(connector: (_) async => mockClient());
       final r = await m.reconnect('nope');
       expect(r.success, isFalse);
       expect(r.error, 'No connection found for server');
@@ -143,7 +230,7 @@ void main() {
     test('TC-CONN-012: state transitions notify listeners', () async {
       final events = <ConnectionState>[];
       final m = ConnectionManager(connector: (_) async {
-        final c = MockClient();
+        final c = mockClient();
         when(() => c.disconnect()).thenReturn(null);
         return c;
       });

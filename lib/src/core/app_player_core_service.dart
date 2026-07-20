@@ -4,7 +4,8 @@ import 'dart:io' show File, Platform;
 import 'dart:ui' show Brightness;
 
 import 'package:flutter/foundation.dart'
-    show Listenable, ValueListenable, visibleForTesting;
+    show Listenable, ValueListenable, kIsWeb, visibleForTesting;
+import 'package:flutter/widgets.dart' show GlobalKey, RepaintBoundary, Widget;
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
     hide ApplicationDefinition;
 import 'package:mcp_bundle/mcp_bundle.dart'
@@ -41,10 +42,22 @@ import '../bundle/bundle_ref.dart';
 import '../bundle/bundle_resolver.dart';
 import '../bundle/bundle_uri_resolver.dart';
 import '../bundle/installed_app_bundle.dart';
+import '../background/background_execution_port.dart';
+import '../background/background_policy.dart';
+import '../capability/app_capability.dart';
+import '../capability/capability_consent_manager.dart';
+import '../connection/connection_continuity.dart';
 import '../connection/connection_health_monitor.dart';
 import '../connection/connection_info.dart';
 import '../connection/connection_manager.dart';
 import '../connection/connection_state.dart';
+import '../debug/debug_capture.dart';
+import '../debug/debug_mcp_host.dart';
+import '../lifecycle/lifecycle_coordinator.dart';
+import '../notification/notification_port.dart';
+import '../permission/platform_permission_port.dart';
+import '../platform_impl/platform_ports.dart';
+import '../schedule/job_scheduler.dart';
 import '../dashboard/dashboard_bundle.dart';
 import '../dashboard/dashboard_bundle_loader.dart';
 import '../dashboard/dashboard_orchestrator.dart';
@@ -125,12 +138,45 @@ class AppPlayerCoreService {
   late final AppMetadataProvider _metadataProvider;
   late final String _bundleInstallRoot;
   late final SettingsStore _settingsStore;
+
+  // Platform integration foundation (FR-PLATFORM). Constructed in
+  // `initialize`; NoOp ports keep pure-Dart hosts working when the shell
+  // injects nothing. See `docs/03_DDD/platform-integration-foundation.md`.
+  late final BackgroundExecutionPort _background;
+  late final PlatformPermissionPort _permissions;
+  late final AppNotificationPort _notifications;
+  late final ConnectionContinuity _continuity;
+  late final JobScheduler _scheduler;
+  late final LifecycleCoordinator _lifecycle;
+  CapabilityConsentManager? _consent;
   KernelApp? _kernel;
   BundleSessionBridge? _bridge;
   final Map<String, DispatchSession> _sessions =
       <String, DispatchSession>{};
 
+  // Debug MCP surface (FR-DEBUG). Desktop-only, settings-gated — created
+  // in [initialize] only when `enableDebugMcp` is set AND the platform is
+  // desktop. Null otherwise, in which case [debugCaptureWrap] is a
+  // pass-through and [debugCaptureKey] is null.
+  DebugSurface? _debugSurface;
+  DebugMcpHost? _debugMcpHost;
+
   bool _initialized = false;
+
+  /// Global key of the debug capture `RepaintBoundary`, or null when the
+  /// Debug MCP host is not active. Hosts wrap their root with
+  /// [debugCaptureWrap]; the key is exposed for advanced integrations.
+  GlobalKey? get debugCaptureKey => _debugSurface?.captureKey;
+
+  /// Wrap [child] in the debug capture `RepaintBoundary` when the Debug
+  /// MCP host is active; otherwise return [child] unchanged. Hosts call
+  /// this from their root `MaterialApp` builder so the capture / tap /
+  /// tree primitives have a stable render boundary.
+  Widget debugCaptureWrap(Widget child) {
+    final key = _debugSurface?.captureKey;
+    if (key == null) return child;
+    return RepaintBoundary(key: key, child: child);
+  }
 
   /// Test-only — whether brain_kernel boot succeeded. Production code
   /// goes through the public surface (open* / setActiveSession /
@@ -176,6 +222,36 @@ class AppPlayerCoreService {
           (Map<String, dynamic> args) async => entry.value(args);
     }
     _toolDispatcher.registerInProcessTools(adapted);
+  }
+
+  /// Host-registered `client.mcpStream` sources (scheme → opener). A bundle's
+  /// live server-pushed channel (e.g. `ble://scan`) resolves through these.
+  final List<
+      ({
+        String scheme,
+        Stream<dynamic> Function(String uri, Map<String, dynamic> params) open
+      })> _streamSources = [];
+
+  /// Register a `client.mcpStream` source — e.g. a BLE scan hub for `ble://`.
+  /// Applied to every app/bundle runtime after it initializes, so DSL bundles
+  /// can bind live server-pushed data. Host-injected and opt-in: the core
+  /// carries no radio/transport dep, mirroring [registerCapabilityTools].
+  /// Additive — safe to call more than once (per-scheme, last wins in the host
+  /// runtime resolver). Registrations made before boot apply to every runtime;
+  /// calling after a runtime exists applies to runtimes created afterwards.
+  void registerStreamSource(
+    String scheme,
+    Stream<dynamic> Function(String uri, Map<String, dynamic> params) open,
+  ) {
+    _streamSources.add((scheme: scheme, open: open));
+  }
+
+  /// Apply every registered stream source to a freshly-initialized runtime
+  /// (the runtime API requires initialization first).
+  void _applyStreamSources(MCPUIRuntime runtime) {
+    for (final s in _streamSources) {
+      runtime.registerStreamSource(s.scheme, s.open);
+    }
   }
 
   /// Test-only — whether the bundle session bridge is booted. Pairs
@@ -250,6 +326,21 @@ class AppPlayerCoreService {
     ValueListenable<Brightness>? hostBrightness,
     McpLogMessageHandler? onMcpLogMessage,
     SettingsStore? settingsStore,
+    // Platform integration (FR-PLATFORM). All optional — when the shell
+    // injects nothing the NoOp ports and pauseResume policy apply, which is
+    // correct for desktop/web hosts without native background support.
+    BackgroundPolicy backgroundPolicy = BackgroundPolicy.pauseResume,
+    BackgroundExecutionPort? backgroundPort,
+    PlatformPermissionPort? permissionPort,
+    AppNotificationPort? notificationPort,
+    ConsentPrompt? consentPrompt,
+    ConsentStore? consentStore,
+    MemoryReclaimer? memoryReclaimer,
+    // Debug MCP (FR-DEBUG) — a desktop-only, settings-gated MCP endpoint
+    // for test automation (screenshot / tree / tap / type). The desktop
+    // gate is enforced here in core, so hosts may pass the raw user pref.
+    bool enableDebugMcp = false,
+    int debugMcpPort = 7930,
   }) async {
     if (_initialized) {
       throw StateError('AppPlayerCoreService already initialized');
@@ -314,6 +405,42 @@ class AppPlayerCoreService {
     );
     _health.startMonitoring();
 
+    // Platform integration foundation (FR-PLATFORM). Ports default to NoOp;
+    // the real native adapters arrive once `appplayer_core` is promoted to a
+    // Flutter plugin. Continuity pauses/reconnects the ConnectionManager and
+    // the health monitor across background transitions; the scheduler runs
+    // periodic jobs; the lifecycle coordinator applies `backgroundPolicy`.
+    _background = backgroundPort ?? defaultBackgroundPort(logger: _logger);
+    _permissions = permissionPort ?? defaultPermissionPort(logger: _logger);
+    _notifications =
+        notificationPort ?? defaultNotificationPort(logger: _logger);
+    await _background.initialize(backgroundPolicy);
+    _continuity = ConnectionContinuity(
+      connections: _conn,
+      healthMonitor: _health,
+      logger: _logger,
+    );
+    _scheduler = JobScheduler(background: _background, logger: _logger);
+    _consent = consentPrompt == null
+        ? null
+        : CapabilityConsentManager(
+            store: consentStore ?? InMemoryConsentStore(),
+            prompt: consentPrompt,
+            permissions: _permissions,
+            logger: _logger,
+          );
+    _lifecycle = LifecycleCoordinator(
+      continuity: _continuity,
+      background: _background,
+      policy: backgroundPolicy,
+      scheduler: _scheduler,
+      memory: memoryReclaimer,
+      logger: _logger,
+      // Desktop does not suspend the process — window hide/minimize must not
+      // pause or disconnect connections. Only mobile drives continuity pause.
+      platformSuspends: Platform.isAndroid || Platform.isIOS,
+    );
+
     // Boot brain_kernel so the bundle's 8 knowledge categories and the
     // standard tool surface are ready: `KnowledgeSystem`, the five
     // runtimes, and the activation `Registry`. The bridge boots cleanly
@@ -367,6 +494,29 @@ class AppPlayerCoreService {
       _logger.warn('KernelApp boot failed', null, e);
     }
 
+    // Debug MCP surface (FR-DEBUG). All native platforms (desktop AND
+    // mobile) — capture + input injection are platform-agnostic; a mobile
+    // app's localhost endpoint is reachable via adb forward / iOS-sim
+    // loopback. Only web is excluded (no dart:io HttpServer). The `!kIsWeb`
+    // guard short-circuits before any `Platform.*` access. Booting the
+    // transport is wrapped so a bind failure (port in use) never brings down
+    // the app.
+    final supported = !kIsWeb;
+    if (enableDebugMcp && supported) {
+      try {
+        final surface = DebugSurface();
+        final host = DebugMcpHost(surface);
+        await host.start(port: debugMcpPort);
+        _debugSurface = surface;
+        _debugMcpHost = host;
+        _logger.info('Debug MCP host started on 127.0.0.1:$debugMcpPort/mcp');
+      } catch (e) {
+        _debugSurface = null;
+        _debugMcpHost = null;
+        _logger.warn('Debug MCP host start failed', null, e);
+      }
+    }
+
     _initialized = true;
     _logger.info('AppPlayerCoreService initialized');
   }
@@ -409,6 +559,71 @@ class AppPlayerCoreService {
     if (client == null) return false;
     await client.setLoggingLevel(level);
     return true;
+  }
+
+  /// FR-META-006 — connect and read `ui://app/info` ONLY, without loading the
+  /// UI or initialising a runtime. This is the "install / register a server"
+  /// step: it populates the launcher tile (name / icon / publisher) so the
+  /// user sees the app before ever opening it — the UI is rendered later, on
+  /// tap, via [openAppFromServer]. Mirrors how a local server is added
+  /// (metadata first, render on open), instead of rendering the app the
+  /// moment it is installed.
+  ///
+  /// Returns the published [AppMetadata] (null when the server exposes none).
+  /// The connection is opened only to read the metadata and is **closed
+  /// again** before returning — install is metadata-only, so it must not hold
+  /// a live socket. The real connection is re-established later, on tap, by
+  /// [openAppFromServer] (mirrors adding a local server: connect, read, close;
+  /// reconnect on open).
+  Future<AppMetadata?> fetchServerMetadata(String serverId) async {
+    _assertReady();
+    return _withTenantGuard(
+      serverId: serverId,
+      operation: () => _fetchServerMetadataImpl(serverId),
+    );
+  }
+
+  Future<AppMetadata?> _fetchServerMetadataImpl(String serverId) async {
+    final server = await _storage.getById(serverId);
+    if (server == null) {
+      throw ServerNotFoundException(serverId);
+    }
+    final result = await _conn.connect(server);
+    if (!result.success || result.connection?.client == null) {
+      throw ConnectionFailedException(
+        serverId,
+        result.error ?? 'Unknown connection failure',
+      );
+    }
+    final client = result.connection!.client!;
+    await _storage.updateLastConnected(serverId, DateTime.now());
+
+    try {
+      // List first (reveals whether ui://app/info exists), then read it with a
+      // retry when it is listed. No runtime, no UI — this is metadata-only.
+      final resources = await client.listResources();
+      final infoListed = resources
+          .any((r) => r.uri == AppMetadataProvider.wellKnownUri);
+      final metadata = await _metadataProvider.fetchFromServer(
+        client,
+        serverId,
+        retries: infoListed ? 3 : 0,
+      );
+      await _metadataProvider.publish(metadata);
+      if (metadata != null) {
+        _metadataCache[AppHandle.server(serverId)] = metadata;
+      }
+      _logger.debug('server.metadata.prefetch', {
+        'serverId': serverId,
+        'metadata': metadata != null,
+        'infoListed': infoListed,
+      });
+      return metadata;
+    } finally {
+      // Install is metadata-only: close the connection once the metadata is
+      // read. The socket is re-established on the first real open (tap).
+      await _conn.disconnect(serverId);
+    }
   }
 
   /// FR-CORE-002 — Online path (MCP server serves `ui://` application).
@@ -454,29 +669,67 @@ class AppPlayerCoreService {
     _JsToolWireState? jsState;
     String? servedBundleId;
     if (!runtime.isInitialized) {
-      metadata = await _metadataProvider.fetchFromServer(client, serverId);
+      // List the server's resources FIRST — it warms the connection and the
+      // resource cache, and reveals whether `ui://app/info` actually exists.
+      // Reading metadata before this (against a cold, just-handshook stream)
+      // was the intermittent "app opens but metadata missing" race: a single
+      // best-effort read raced server/transport readiness and silently
+      // yielded null, so the tile kept its fallback name until the user
+      // re-entered enough times to hit a lucky timing. The list is reused for
+      // both UI load and MCP Serving bundle-document detection (one round-trip).
+      final resources = await client.listResources();
+
+      // Metadata read on the now-warm connection. When the server actually
+      // exposes `ui://app/info`, a null/error is transient (cold start,
+      // stream not ready) — retry with a short backoff instead of giving up
+      // after one shot. Unlisted → single best-effort attempt (a server may
+      // serve it without listing, but don't hammer one that simply lacks it).
+      final infoListed = resources
+          .any((r) => r.uri == AppMetadataProvider.wellKnownUri);
+      metadata = await _metadataProvider.fetchFromServer(
+        client,
+        serverId,
+        retries: infoListed ? 3 : 0,
+      );
       await _metadataProvider.publish(metadata);
       if (metadata != null) {
         _metadataCache[handle] = metadata;
       }
 
-      // List the server's resources once and reuse for both UI load and
-      // MCP Serving bundle-document detection (avoids a redundant round-trip).
-      final resources = await client.listResources();
-      final definition = await _appLoader.load(client, resources: resources);
+      final loaded = await _appLoader.load(client, resources: resources);
+      // Run every server app through AppPlayer's standard app-execution
+      // structure: promote a bare `page` to a single-route application so the
+      // runtime mounts routing (route -> MCPPageWidget frames the page and
+      // lifts its `title` into an AppBar) and the dashboard/navigation slots
+      // come live. A server that already serves an application passes through
+      // unchanged. pickAppUri returns the same uri load() just read.
+      final appUri = _appLoader.pickAppUri(resources);
+      final definition = appUri == null
+          ? loaded
+          : _appLoader.wrapAsApplication(loaded, appUri: appUri);
+      final wrapped = !identical(definition, loaded);
       _logger.debug('server.open.first', {
         'serverId': serverId,
         'metadata': metadata != null,
+        'infoListed': infoListed,
         'resources': resources.length,
         'defKeys': definition.keys.take(8).join(','),
+        'wrapped': wrapped,
         'hasTheme': definition['theme'] != null ||
             (definition['runtime'] as Map?)?['services']?['theme'] != null,
       });
+      // When we promoted the page, serve its already-parsed content back to
+      // the route from memory instead of re-reading it over the (possibly
+      // dead) link — so the app's first frame, and its exit affordance,
+      // always render (see cachingPageLoaderFor).
       await runtime.initialize(
         definition,
-        pageLoader: _appLoader.pageLoaderFor(client),
+        pageLoader: wrapped && appUri != null
+            ? _appLoader.cachingPageLoaderFor(client, {appUri: loaded})
+            : _appLoader.pageLoaderFor(client),
       );
       runtime.setTrustLevel(trustLevel);
+      _applyStreamSources(runtime);
       _notifRouter.register(
         client: client,
         runtime: runtime,
@@ -548,6 +801,25 @@ class AppPlayerCoreService {
     );
   }
 
+  /// FR-META-007 — load a bundle's manifest and publish its metadata
+  /// (name / icon / publisher) WITHOUT adapting the definition or building a
+  /// runtime. The bundle twin of [fetchServerMetadata]: "installing a
+  /// bundle" only writes it to disk (`installBundleFromFile`), so call this
+  /// right after to populate the launcher card — otherwise the tile shows
+  /// the raw bundle id until the user first opens it. The UI is rendered
+  /// later, on open ([openAppFromBundle]).
+  Future<AppMetadata> fetchBundleMetadata(BundleRef bundleRef) async {
+    _assertReady();
+    final bundle = await _bundleLoader.load(bundleRef);
+    final uriResolver =
+        BundleUriResolver(assets: bundle.assets, logger: _logger);
+    final metadata = _metadataProvider.fromBundle(bundle, uriResolver);
+    await _metadataProvider.publish(metadata);
+    _metadataCache[AppHandle.bundle(bundle.manifest.id)] = metadata;
+    _logger.debug('bundle.metadata.prefetch', {'bundleId': bundle.manifest.id});
+    return metadata;
+  }
+
   /// FR-CORE-003 — Local Bundle path (`McpBundle` file / inline JSON).
   Future<AppSession> openAppFromBundle(
     BundleRef bundleRef, {
@@ -603,6 +875,7 @@ class AppPlayerCoreService {
       );
     }
     runtime.setTrustLevel(trustLevel);
+    _applyStreamSources(runtime);
 
     // Activate declarative sections, expose the bundle document, and wire
     // in-process JS tools. Shared with the served-bundle path
@@ -967,6 +1240,32 @@ class AppPlayerCoreService {
   // Observability passthrough.
   Map<String, ConnectionInfo> get connections => _conn.connections;
 
+  // --- Platform integration (FR-PLATFORM) -------------------------------
+
+  /// Forward an OS lifecycle transition (FR-LIFE-001). The shell's
+  /// `WidgetsBindingObserver` maps `AppLifecycleState` to [AppLifecyclePhase]
+  /// and calls this; the coordinator applies the configured
+  /// [BackgroundPolicy] — pausing/reconnecting connections and the health
+  /// monitor, and pausing/resuming scheduled jobs.
+  Future<void> onLifecyclePhase(AppLifecyclePhase phase) =>
+      _lifecycle.onPhase(phase);
+
+  /// Periodic / scheduled background jobs (FR-SCHED). Hosts register jobs
+  /// (health sweeps, data pulls) that run on a foreground timer and delegate
+  /// to the platform background task while suspended.
+  JobScheduler get scheduler => _scheduler;
+
+  /// Per-app capability consent (FR-CAP). Null unless the shell injected a
+  /// [ConsentPrompt] in [initialize] — pure-Dart hosts without a consent UI
+  /// have no enforcement point.
+  CapabilityConsentManager? get consent => _consent;
+
+  /// OS permission port (FR-PERM) for shell-driven, lazy permission requests.
+  PlatformPermissionPort get permissions => _permissions;
+
+  /// Notification port (FR-NOTIF) apps post through and the shell renders.
+  AppNotificationPort get notifications => _notifications;
+
   /// Notifier that fires whenever connection or runtime lifecycle state
   /// changes — launcher UI listens to this to refresh per-app badges
   /// ("connected" dot on the app icon) without polling.
@@ -1036,7 +1335,16 @@ class AppPlayerCoreService {
   /// FR-CORE-006
   Future<void> dispose() async {
     if (!_initialized) return;
+    try {
+      await _debugMcpHost?.stop();
+    } catch (e) {
+      _logger.warn('Debug MCP host stop failed', null, e);
+    }
+    _debugMcpHost = null;
+    _debugSurface = null;
     _health.stopMonitoring();
+    await _lifecycle.dispose();
+    _scheduler.dispose();
     await _dashboard.close();
     _activeDashboardSession = null;
     await _runtime.removeAllRuntimes();

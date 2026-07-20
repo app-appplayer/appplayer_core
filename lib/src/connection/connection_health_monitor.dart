@@ -63,6 +63,10 @@ class ConnectionHealthMonitor {
       _reconnectAttempts[serverId] ?? 0;
 
   Future<void> _performHealthCheck() async {
+    // Keepalive + active liveness for transient stream links (BLE etc.): warms
+    // the link so it drops far less often, and flips a silently-dead link to
+    // error so the reconnect pass below picks it up this same tick.
+    await _conn.keepAliveSweep();
     final entries = _conn.connections.entries.toList();
     for (final entry in entries) {
       final info = entry.value;

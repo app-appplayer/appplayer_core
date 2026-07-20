@@ -30,7 +30,7 @@ void main() {
         if (attempts <= 3) {
           throw StateError('flaky');
         }
-        final c = MockClient();
+        final c = mockClient();
         when(() => c.disconnect()).thenReturn(null);
         return c;
       });

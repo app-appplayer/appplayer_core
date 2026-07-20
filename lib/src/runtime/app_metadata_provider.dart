@@ -21,19 +21,55 @@ class AppMetadataProvider {
   final AppMetadataSink? _sink;
   final Logger _logger;
 
-  static const String _wellKnownUri = 'ui://app/info';
+  static const String wellKnownUri = 'ui://app/info';
 
   /// FR-META-001, 002 — best-effort Online fetch.
-  Future<AppMetadata?> fetchFromServer(Client client, String serverId) async {
+  ///
+  /// The `ui://app/info` read fires right after the connection handshake, so
+  /// the first attempt can race a cold remote server or a not-yet-warm
+  /// streamable-HTTP response channel and come back empty/erroring. When the
+  /// caller knows the resource actually exists (it was in `listResources`),
+  /// pass [retries] > 0 so a transient miss is retried with a short backoff
+  /// instead of silently yielding null — the launcher tile would otherwise
+  /// keep its fallback name until the user re-enters the app enough times to
+  /// hit a lucky timing. A genuine miss (resource absent, malformed payload)
+  /// still returns null on the first pass without burning retries.
+  Future<AppMetadata?> fetchFromServer(
+    Client client,
+    String serverId, {
+    int retries = 0,
+    Duration retryDelay = const Duration(milliseconds: 300),
+  }) async {
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      final (metadata, transient) = await _tryFetch(client, serverId, attempt);
+      if (metadata != null) return metadata;
+      // Only a transient failure (empty/error) is worth retrying; a
+      // definitive miss (payload present but not an object) is not.
+      if (!transient || attempt == retries) return null;
+      await Future<void>.delayed(retryDelay);
+    }
+    return null;
+  }
+
+  /// Returns the parsed metadata (or null) and whether the miss looked
+  /// transient (empty contents / read threw) — the signal the retry loop
+  /// uses. A malformed-but-present payload is a definitive miss (not
+  /// transient): retrying would not help.
+  Future<(AppMetadata?, bool)> _tryFetch(
+    Client client,
+    String serverId,
+    int attempt,
+  ) async {
     try {
-      final result = await client.readResource(_wellKnownUri);
+      final result = await client.readResource(wellKnownUri);
       if (result.contents.isEmpty) {
-        _logger.debug('metadata.online.fetch.miss', {'serverId': serverId});
-        return null;
+        _logger.debug('metadata.online.fetch.miss',
+            {'serverId': serverId, 'attempt': attempt, 'reason': 'empty'});
+        return (null, true);
       }
       final text = result.contents.first.text;
       if (text == null || text.isEmpty) {
-        return null;
+        return (null, true);
       }
 
       final decoded = jsonDecode(text);
@@ -42,21 +78,23 @@ class AppMetadataProvider {
           'serverId': serverId,
           'reason': 'payload is not an object',
         });
-        return null;
+        return (null, false);
       }
 
       final metadata = _fromJson(serverId, decoded);
       _logger.info('metadata.online.fetch.success', {
         'serverId': serverId,
         'name': metadata.name,
+        'attempt': attempt,
       });
-      return metadata;
+      return (metadata, false);
     } catch (e) {
       _logger.debug('metadata.online.fetch.miss', {
         'serverId': serverId,
+        'attempt': attempt,
         'cause': e.toString(),
       });
-      return null;
+      return (null, true);
     }
   }
 

@@ -54,7 +54,7 @@ class ApplicationLoader {
 
     _logger.debug('Resources listed', {'count': resolved.length});
 
-    final appUri = _pickAppUri(resolved);
+    final appUri = pickAppUri(resolved);
     if (appUri == null) {
       throw ResourceNotFoundException('No UI resources found');
     }
@@ -89,6 +89,33 @@ class ApplicationLoader {
     }
   }
 
+  /// Promote a served UI definition to AppPlayer's standard app-execution
+  /// structure: a `type:"application"` document with a single route pointing
+  /// at [appUri]. A definition that is already an application passes through
+  /// unchanged.
+  ///
+  /// Every app — even a one-page server board — must run as an application so
+  /// the runtime mounts the routing pipeline: each route renders through
+  /// `MCPPageWidget`, which frames the page in a Scaffold and lifts the page's
+  /// own `title` into an AppBar (a bare page rendered directly gets neither).
+  /// The application structure is also what makes the dashboard slot and
+  /// navigation available. The visible name comes from the page `title` here,
+  /// so a board that serves no `ui://app/info` metadata still shows its name —
+  /// the app structure carries it, no separate metadata fetch required.
+  Map<String, dynamic> wrapAsApplication(
+    Map<String, dynamic> definition, {
+    required String appUri,
+  }) {
+    if (definition['type'] == 'application') return definition;
+    final title = definition['title'];
+    return <String, dynamic>{
+      'type': 'application',
+      if (title is String && title.isNotEmpty) 'title': title,
+      'routes': <String, dynamic>{'/': appUri},
+      'initialRoute': '/',
+    };
+  }
+
   /// FR-APP-006
   PageLoader pageLoaderFor(Client client) {
     return (String uri) async {
@@ -103,8 +130,36 @@ class ApplicationLoader {
     };
   }
 
-  /// FR-APP-002 selection priority.
-  String? _pickAppUri(List<Resource> resources) {
+  /// Page loader that serves [cache] entries from memory and falls back to the
+  /// live [client] for any other uri.
+  ///
+  /// The server-open path already reads the entry page (`ui://app`) once to
+  /// detect its type before promoting it to an application ([wrapAsApplication]).
+  /// Routing that page through the client again — a second read over a possibly
+  /// dead link — is what surfaced "Failed to load page / Client is not
+  /// initialized" on a screen with no way out. Feeding the already-parsed
+  /// content back through the cache means the app's first frame renders from
+  /// memory, so its AppBar (and its close/exit affordance) is always present,
+  /// even if the connection dropped right after the initial load.
+  PageLoader cachingPageLoaderFor(
+    Client client,
+    Map<String, Map<String, dynamic>> cache,
+  ) {
+    final base = pageLoaderFor(client);
+    return (String uri) async {
+      final cached = cache[uri];
+      if (cached != null) {
+        _logger.debug('Loading page from cache', {'uri': uri});
+        return cached;
+      }
+      return base(uri);
+    };
+  }
+
+  /// FR-APP-002 selection priority. Public so the server-open path can
+  /// resolve the route target when promoting a bare page to a single-route
+  /// application (see [wrapAsApplication]).
+  String? pickAppUri(List<Resource> resources) {
     if (resources.isEmpty) return null;
 
     for (final r in resources) {

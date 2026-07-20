@@ -105,5 +105,77 @@ void main() {
         version: '1',
       ));
     });
+
+    test('TC-META-006: transient miss then success is retried and lands',
+        () async {
+      var calls = 0;
+      when(() => client.readResource('ui://app/info')).thenAnswer((_) async {
+        calls++;
+        // First two reads race a cold server (throw / empty); the third
+        // succeeds — mirrors "enter/exit a few times and it finally shows".
+        if (calls == 1) throw StateError('stream not ready');
+        if (calls == 2) return const ReadResourceResult(contents: []);
+        return _jsonResult('{"name":"Foo","version":"2.1.0"}');
+      });
+      final provider = AppMetadataProvider();
+      final metadata = await provider.fetchFromServer(
+        client,
+        'srv1',
+        retries: 3,
+        retryDelay: Duration.zero,
+      );
+      expect(metadata, isNotNull);
+      expect(metadata!.name, 'Foo');
+      expect(calls, 3);
+    });
+
+    test('TC-META-007: retries are exhausted → null (no infinite loop)',
+        () async {
+      var calls = 0;
+      when(() => client.readResource('ui://app/info')).thenAnswer((_) async {
+        calls++;
+        throw StateError('still cold');
+      });
+      final provider = AppMetadataProvider();
+      final metadata = await provider.fetchFromServer(
+        client,
+        'srv1',
+        retries: 2,
+        retryDelay: Duration.zero,
+      );
+      expect(metadata, isNull);
+      expect(calls, 3, reason: 'initial attempt + 2 retries');
+    });
+
+    test('TC-META-008: definitive miss (malformed payload) is not retried',
+        () async {
+      var calls = 0;
+      when(() => client.readResource('ui://app/info')).thenAnswer((_) async {
+        calls++;
+        return _jsonResult('"not an object"');
+      });
+      final provider = AppMetadataProvider();
+      final metadata = await provider.fetchFromServer(
+        client,
+        'srv1',
+        retries: 3,
+        retryDelay: Duration.zero,
+      );
+      expect(metadata, isNull);
+      expect(calls, 1, reason: 'a malformed payload will not heal on retry');
+    });
+
+    test('TC-META-009: default (retries: 0) is a single best-effort attempt',
+        () async {
+      var calls = 0;
+      when(() => client.readResource('ui://app/info')).thenAnswer((_) async {
+        calls++;
+        throw StateError('cold');
+      });
+      final provider = AppMetadataProvider();
+      final metadata = await provider.fetchFromServer(client, 'srv1');
+      expect(metadata, isNull);
+      expect(calls, 1);
+    });
   });
 }

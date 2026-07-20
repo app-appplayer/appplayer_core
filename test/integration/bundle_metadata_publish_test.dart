@@ -77,8 +77,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
-      'installBundleFromDirectory + openAppFromBundle delivers manifest '
-      'metadata to RegistryMetadataSink', () async {
+      'installBundleFromDirectory + fetchBundleMetadata delivers manifest '
+      'metadata to RegistryMetadataSink (no runtime / no render)', () async {
     final mbdPath = _resolveMbd();
     expect(Directory(mbdPath).existsSync(), isTrue,
         reason: 'fixture missing: $mbdPath');
@@ -113,18 +113,13 @@ void main() {
     // id == installed.id (1-to-1 mapping) so the sink can find it.
     await registry.add(_Entry(id: installed.id, name: installed.id));
 
-    // Mirror _fetchBundleMetadata — open the bundle once to surface
-    // metadata. Swallow runtime-engine initialization errors that can
-    // happen in a test binding (the metadata publish runs BEFORE the
-    // runtime init step inside _openFromBundleImpl, so the sink should
-    // already have fired).
-    try {
-      final session =
-          await core.openAppFromBundle(BundleInstalledRef(installed.id));
-      await session.close();
-    } catch (_) {
-      // expected in test binding — see comment above
-    }
+    // Mirror the install-time prefetch (Pro InstallSink + AppFormScreen):
+    // publish manifest metadata WITHOUT opening/rendering the app. No
+    // runtime is built, so there is nothing to swallow — the metadata-only
+    // primitive is the whole point (install ≠ run).
+    final metadata =
+        await core.fetchBundleMetadata(BundleInstalledRef(installed.id));
+    expect(metadata.name, _bundleName);
 
     final entry = registry.byId(installed.id);
     expect(entry, isNotNull);

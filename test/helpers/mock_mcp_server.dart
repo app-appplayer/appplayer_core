@@ -11,6 +11,11 @@ class MockMcpServer {
   MockMcpServer() : client = MockClient() {
     when(() => client.disconnect()).thenReturn(null);
     when(() => client.onNotification(any(), any())).thenReturn(null);
+    // ConnectionManager subscribes to this liveness stream to clear dead
+    // connections; a never-firing stream keeps the connection "alive" for the
+    // duration of a test that isn't simulating a transport drop.
+    when(() => client.onDisconnect)
+        .thenAnswer((_) => const Stream<DisconnectReason>.empty());
   }
 
   final MockClient client;

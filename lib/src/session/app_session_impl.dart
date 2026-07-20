@@ -172,6 +172,12 @@ class AppSessionImpl implements AppSession {
       String tool, Map<String, dynamic> params) async {
     final client = _client;
     if (client == null) {
+      // Local bundle (no server client): still route host-registered in-process
+      // capability tools (registerCapabilityTools, e.g. `provision.*`) directly
+      // through the dispatcher — they need no external MCP client.
+      if (_tools.inProcessToolNames.contains(tool)) {
+        return _tools.callInProcess(tool, params);
+      }
       _logger.warn('session.tool.no_client', {
         'handle': handle.toString(),
         'tool': tool,
