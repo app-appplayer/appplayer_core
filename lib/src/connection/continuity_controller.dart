@@ -3,7 +3,7 @@
 /// The lifecycle coordinator drives connection continuity through this
 /// interface; `ConnectionContinuity` (wired onto `ConnectionManager`)
 /// implements it. Kept as a seam so the coordinator is unit-testable with a
-/// fake. See `docs/03_DDD/platform-integration-foundation.md`.
+/// fake.
 library;
 
 abstract class ContinuityController {

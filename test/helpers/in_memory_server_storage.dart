@@ -3,7 +3,7 @@ import 'package:appplayer_core/src/storage/server_storage.dart';
 
 /// Test-only in-memory implementation of [ServerStorage].
 ///
-/// Satisfies the full contract defined in `docs/04_TEST/storage-server-storage.md`.
+/// Satisfies the full `ServerStorage` contract.
 class InMemoryServerStorage implements ServerStorage {
   final Map<String, ServerConfig> _servers = {};
 

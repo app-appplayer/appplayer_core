@@ -1,3 +1,27 @@
+## 0.1.14 - 2026-07-22 - Durable reconnect (token re-grant seam)
+
+Additive (0.x → patch). No public API removed.
+
+- **Durable reconnect — `ServerReGrant` seam.** A marketplace server's credential
+  is a short-lived per-user `connectionToken` baked into
+  `ServerConfig.transportConfig`. When a connect attempt fails and the server
+  carries a bearer token, `ConnectionManager` now calls an optional host-supplied
+  re-grant hook, refreshes the token, and retries the connect once (the retry
+  runs without re-grant so a persistently bad server can't loop). This closes the
+  gap where opening a saved server app with an expired token 401'd until a manual
+  reinstall — `openAppFromServer`, `reconnect()` and `ConnectionHealthMonitor` all
+  funnel through `connect()`, so all three are covered.
+  - New: `typedef ServerReGrant = Future<ServerConfig?> Function(ServerConfig stale)`
+    (barrel-exported), `ConnectionManager.tokenReGrant` (mutable, optional),
+    `AppPlayerCoreService.serverReGrant` setter (host wires it after the
+    marketplace session exists).
+  - **Fully backward-compatible**: when no hook is wired (or the server carries no
+    bearer token) connect/reconnect behave byte-for-byte as before — static-token,
+    hand-typed and discovered (tcp/ble/serial) servers are untouched.
+- Doc hygiene: removed dangling doc/spec references (`docs/`, `specs/`, `spec §N`)
+  from source comments so nothing points outside the published package. No code
+  change.
+
 ## 0.1.13 - 2026-07-18 - Flutter-plugin promotion · metadata-only install · single-route apps · debug MCP · connection continuity
 
 Additive across the tracks landed since 0.1.12. `^0.1.12` consumers pick these
@@ -68,8 +92,8 @@ up on floor-bump; no public API removed.
   field/ref and the inline probe-and-cast (the `is`-no-promotion footgun is now
   sealed inside the kernel helper). Behaviour unchanged.
 - Floors `brain_kernel ^0.1.2 → ^0.1.7` (the `ExtensionTransportConnect`
-  capability interface + `connectExtension` helper, spec 08 §4 Standard 3
-  Layers). No API change to appplayer_core's own surface.
+  capability interface + `connectExtension` helper). No API change to
+  appplayer_core's own surface.
 
 ## 0.1.9 - 2026-06-22 - Capability tools registration seam (additive)
 
@@ -93,7 +117,6 @@ up on floor-bump; no public API removed.
   `McpClientKernelHost.connectWith` (brain_kernel 0.1.2). Returns a
   `KernelClientConnection` whose `callTool` / `readResource` / `listTools`
   reach the remote server. Throws `StateError` when the kernel is not booted.
-  See `specs/platform/08-extension.md` §4.
 
 ### Changed (dependency floor)
 - `brain_kernel` `^0.1.1` → `^0.1.2` — `connectExtensionTransport` delegates
@@ -113,7 +136,7 @@ up on floor-bump; no public API removed.
 
 - **BrainBridge removed** (phase D · 2026-05-24) — 451 lines + 6 facade wrappers + 2 tests dropped. `AppPlayerCoreService` now calls `KernelApp.boot(...)` directly, registers `standardTools(app)`, and delegates `setActiveBundle` / `scopeIdFor`. Zero external-shell cascade.
 - **bundle session bridge wiring** (2026-05-25) — `BundleSessionBridge` lifecycle wired at 5 points of `AppPlayerCoreService` (boot / activate / onClose / closeApp / dispose). `_sessions` is a per-bundleId map. `McpAtom` + `AgentAtom` gain optional `bridge` / `session` arguments and wrap dispatch in `bridge.runScoped(session, ...)`.
-- **MCP serving** (`specs/mcp_serving` 1.0) — `_activateBundleSections` exposes the active bundle at the well-known `bundle://manifest.json` resource (shared by the local-bundle and served-bundle paths). `openAppFromServer` reconstructs a served bundle: it detects the document, parses it with `McpBundleLoader.fromJson`, and runs the same kernel activation a local bundle uses (knowledge / settings / behavior come live); tool execution stays remote and the UI loads via `ui://app`. New `servedResources` / `readServedResource` accessors. `ApplicationLoader.load` gains an optional `resources` parameter so the server is listed only once.
+- **MCP serving** (MCP Serving 1.0) — `_activateBundleSections` exposes the active bundle at the well-known `bundle://manifest.json` resource (shared by the local-bundle and served-bundle paths). `openAppFromServer` reconstructs a served bundle: it detects the document, parses it with `McpBundleLoader.fromJson`, and runs the same kernel activation a local bundle uses (knowledge / settings / behavior come live); tool execution stays remote and the UI loads via `ui://app`. New `servedResources` / `readServedResource` accessors. `ApplicationLoader.load` gains an optional `resources` parameter so the server is listed only once.
 - **import unification** — the bridge ships inside the kernel (`brain_kernel/lib/src/system/bridge/`), so hosts import only `package:brain_kernel/brain_kernel.dart`.
 - **analyze cleanup** — removed 5 `unnecessary_import` hints across `test/src/dashboard/dashboard_bundle_test.dart` + `test/src/session/app_session_impl_test.dart` (info → 0).
 
@@ -173,10 +196,10 @@ Core internal modules (ConnectionManager / ToolDispatcher / AppSession / Notific
 ## [0.1.2] - 2026-05-01 - Tool dispatcher align with runtime 0.4.3
 
 ### Changed
-- `ToolDispatcher.call` now returns `Future<dynamic>` (the decoded JSON response) instead of `Future<void>`. Host self-fold removed; the runtime applies spec §3.10 auto-merge against its own state.
+- `ToolDispatcher.call` now returns `Future<dynamic>` (the decoded JSON response) instead of `Future<void>`. Host self-fold removed; the runtime applies auto-merge against its own state.
 - `runtime` parameter dropped from `ToolDispatcher.call` — no longer needed.
 - `AppSessionImpl._onToolCall` returns the dispatcher's response so the runtime can fold it.
-- Runtime dependency raised to `flutter_mcp_ui_runtime: ^0.4.3` (carries §3.10 auto-merge + §4.4.2 `event` variable + errorBoundary/errorRecovery `event.{error, stack}` fixes).
+- Runtime dependency raised to `flutter_mcp_ui_runtime: ^0.4.3` (carries auto-merge + `event` variable + errorBoundary/errorRecovery `event.{error, stack}` fixes).
 
 ---
 

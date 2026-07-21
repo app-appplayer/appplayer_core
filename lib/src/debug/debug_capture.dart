@@ -36,7 +36,7 @@ class DebugSurface {
   /// Capture the boundary to PNG bytes. Full window when [area] is null;
   /// otherwise crops to [area] (logical coordinates) via a
   /// `PictureRecorder` pass. Returns null when the boundary is not yet
-  /// attached / sized. Copied from `ui_control_tools._captureRegion`.
+  /// attached / sized.
   Future<Uint8List?> captureScreenshot({
     double pixelRatio = 1.0,
     Rect? area,
@@ -80,8 +80,7 @@ class DebugSurface {
   /// `RenderMetaData` node that AppPlayer's flutter_mcp_ui runtime wraps
   /// rendered widgets in. Each entry carries `{type, id?, text?, label?,
   /// title?, rect:[x,y,w,h]}` in capture-root coordinates. Returns an
-  /// empty list when the boundary is not attached yet. Copied from
-  /// `studio_workspace._walkLayoutSnapshot`.
+  /// empty list when the boundary is not attached yet.
   List<Map<String, dynamic>> layoutSnapshot() {
     final root = _captureRenderBox();
     if (root == null) return const <Map<String, dynamic>>[];
@@ -119,8 +118,7 @@ class DebugSurface {
   /// Resolve an [elementId] to its on-screen rect (capture-root coords),
   /// or null when no node matches. Accepts `<type>:<key>` (strict) or a
   /// bare `<key>` (matches the first node whose id/text/label/title
-  /// equals the key regardless of type). Copied from
-  /// `studio_workspace._resolveElementRect`.
+  /// equals the key regardless of type).
   Rect? resolveElementRect(String elementId) {
     final colon = elementId.indexOf(':');
     final String? wantType;
@@ -181,7 +179,7 @@ class DebugSurface {
 
   /// Dispatch a synthetic tap at ([x], [y]) through Flutter's
   /// `GestureBinding` pointer pipeline — the same path a real pointer
-  /// takes. Copied from `ui_control_tools._dispatchTap`.
+  /// takes.
   Future<void> dispatchTap(double x, double y, {int holdMs = 40}) async {
     final binding = GestureBinding.instance;
     final position = Offset(x, y);
@@ -236,7 +234,6 @@ class DebugSurface {
   /// [elementId] is supplied the surface first taps its center to focus
   /// it (chaining). [clear] replaces existing content (default) vs
   /// appends; [submit] fires the field's `onSubmitted` afterwards.
-  /// Copied from `ui_control_tools`' text-injection recipe.
   Future<Map<String, dynamic>> typeText(
     String text, {
     bool clear = true,

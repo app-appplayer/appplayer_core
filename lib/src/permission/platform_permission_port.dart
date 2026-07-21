@@ -2,8 +2,6 @@
 ///
 /// Core contract; real implementation is the core plugin's native code.
 /// Tests / desktop use [NoOpPlatformPermissionPort] (everything granted).
-///
-/// See `docs/03_DDD/platform-integration-foundation.md`.
 library;
 
 import 'dart:async';

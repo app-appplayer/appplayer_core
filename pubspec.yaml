@@ -1,6 +1,6 @@
 name: appplayer_core
 description: AppPlayer Core — shared Flutter library for MCP server connection, bundle handling, and UI runtime orchestration.
-version: 0.1.13
+version: 0.1.14
 homepage: https://app-appplayer.github.io/makemind
 repository: https://github.com/app-appplayer/appplayer_core
 issue_tracker: https://github.com/app-appplayer/appplayer_core/issues
@@ -25,7 +25,7 @@ dependencies:
   mcp_bundle: ^0.4.8
   # brain_kernel — drives the bundle's 8 knowledge/tool categories. The
   # core auto-creates a BundleActivation and registers it with the
-  # registry on every bundle open (knowledge-operations.md §1–§12). The
+  # registry on every bundle open. The
   # barrel re-exports mcp_bundle, mcp_server, mcp_llm, and flowbrain_core,
   # so downstream products do not list those packages directly
   # (FR-CMP-002).

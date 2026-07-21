@@ -6,14 +6,14 @@ import '../exceptions.dart';
 import '../logging/logger.dart';
 
 /// In-process tool handler. Returns the parsed JSON value (or `null`)
-/// that the runtime applies spec §3.10 auto-merge against — exactly the
+/// that the runtime applies auto-merge against — exactly the
 /// shape an MCP `callTool` text response would decode to.
 typedef InProcessToolHandler = Future<dynamic> Function(
   Map<String, dynamic> params,
 );
 
 /// Dispatches MCP tool calls and returns the parsed JSON response so the
-/// runtime can apply spec §3.10 auto-merge against its own state. Host
+/// runtime can apply auto-merge against its own state. Host
 /// responsibilities here are limited to MCP forwarding, listTools-based
 /// existence checks (for clearer error messaging), and exception modelling
 /// (MOD-RUNTIME-003, FR-TOOL-001~005).

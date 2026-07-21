@@ -9,8 +9,7 @@
 /// a transport resumption token (SSE `Last-Event-ID`). The resolved
 /// `mcp_client` transport does not surface one, so [ResumeCursor.lastEventId]
 /// is reserved but stays null until that capability lands; continuity today is
-/// reconnect + fresh server state. See
-/// `docs/03_DDD/platform-integration-foundation.md` §4.3.
+/// reconnect + fresh server state.
 library;
 
 import '../logging/logger.dart';

@@ -5,8 +5,6 @@
 /// multi-platform Flutter package, so it is promoted to a plugin and carries
 /// the native adapters itself (single package). Tests and unsupported
 /// platforms use [NoOpBackgroundExecutionPort].
-///
-/// See `docs/03_DDD/platform-integration-foundation.md`.
 library;
 
 import 'dart:async';

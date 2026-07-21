@@ -1,4 +1,4 @@
-/// Exception hierarchy for AppPlayer Core (SDD §8).
+/// Exception hierarchy for AppPlayer Core.
 ///
 /// All public API failures throw a subclass of [AppPlayerException].
 /// Bundle exceptions are split into two stages — [BundleLoadException] for

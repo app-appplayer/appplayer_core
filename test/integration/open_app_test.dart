@@ -81,7 +81,7 @@ void main() {
     test(
         'IT-007: MCP Serving 1.0 — server bundle document is reconstructed + served',
         () async {
-      // specs/mcp_serving/spec/1.0 — the server exposes the bundle document
+      // MCP Serving 1.0 — the server exposes the bundle document
       // alongside ui://app; the client reconstructs the McpBundle and serves
       // it in-process at the well-known URI (equivalence with a local bundle).
       final doc = <String, dynamic>{
@@ -129,7 +129,7 @@ void main() {
       expect(core.servedResources, isNot(contains('bundle://manifest.json')));
     });
 
-    test('IT-003: tool dispatch returns parsed JSON response (spec §3.10 fold is runtime responsibility)',
+    test('IT-003: tool dispatch returns parsed JSON response (fold is runtime responsibility)',
         () async {
       await core.openAppFromServer('s1');
       final result = await core.toolDispatcherForInternals.call(

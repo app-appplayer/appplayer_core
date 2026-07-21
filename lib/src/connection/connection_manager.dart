@@ -11,6 +11,22 @@ import 'transport_factory.dart';
 /// Abstraction over `McpClient.createAndConnect` to allow injection in tests.
 typedef ClientConnector = Future<Client> Function(TransportConfig transport);
 
+/// Host-provided token re-grant for durable reconnect.
+///
+/// A marketplace server's credential is a short-lived per-user connectionToken
+/// baked into [ServerConfig.transportConfig] `accessToken`. When a connect
+/// attempt fails and the token may be stale, the manager calls this hook with
+/// the stale config; the host re-grants a fresh token (silently, via the
+/// marketplace session), persists it, and returns the refreshed [ServerConfig].
+/// Returning null (or an unchanged token) means "no re-grant available" — the
+/// original failure surfaces unchanged.
+///
+/// Optional: when no hook is wired, connect/reconnect behave exactly as before
+/// (static token or no-auth). Only token-bearing servers whose host supplies a
+/// hook are affected — hand-typed URLs, discovered boards (tcp/ble/serial) and
+/// no-auth servers are untouched.
+typedef ServerReGrant = Future<ServerConfig?> Function(ServerConfig stale);
+
 Future<Client> _defaultConnector(TransportConfig transport) async {
   final config = McpClient.simpleConfig(
     name: 'AppPlayer Client',
@@ -49,6 +65,12 @@ class ConnectionManager extends ChangeNotifier {
   final Duration _waitMaxDuration;
   final Map<String, ConnectionInfo> _connections = {};
 
+  /// Optional durable-reconnect hook (see [ServerReGrant]). Mutable so the host
+  /// can wire it after the marketplace session exists (the core / manager is
+  /// built at composition time, before the marketplace capabilities). Null =
+  /// no re-grant; connect/reconnect stay byte-for-byte as before.
+  ServerReGrant? tokenReGrant;
+
   Map<String, ConnectionInfo> get connections =>
       Map.unmodifiable(_connections);
 
@@ -58,7 +80,16 @@ class ConnectionManager extends ChangeNotifier {
   ConnectionInfo? getConnection(String serverId) => _connections[serverId];
 
   /// FR-CONN-001~003, 010
-  Future<ConnectionResult> connect(ServerConfig server) async {
+  Future<ConnectionResult> connect(ServerConfig server) =>
+      // Allow one durable-reconnect re-grant on the outer attempt; the retry
+      // (with a fresh token) runs with allowReGrant:false so a persistently
+      // bad server can't loop.
+      _connect(server, allowReGrant: true);
+
+  Future<ConnectionResult> _connect(
+    ServerConfig server, {
+    required bool allowReGrant,
+  }) async {
     final existing = _connections[server.id];
     if (existing != null) {
       if (existing.state == ConnectionState.connected) {
@@ -104,12 +135,51 @@ class ConnectionManager extends ChangeNotifier {
       _logger.info('Connected', {'serverId': server.id});
       return ConnectionResult.success(info);
     } catch (e, st) {
+      // Durable reconnect (MOD-CONN): a marketplace server's connectionToken is
+      // a short-lived per-user JWS baked into transportConfig. If it went stale
+      // the connect (MCP initialize) fails auth. When a re-grant hook is wired
+      // AND this server carries a bearer token, refresh it once and retry — the
+      // fresh open re-initialises with a valid token. This runs for
+      // openAppFromServer, reconnect() and ConnectionHealthMonitor alike, since
+      // all three funnel through connect(). No hook / no token → skipped, and
+      // the original failure surfaces unchanged (byte-for-byte prior behaviour).
+      if (allowReGrant && tokenReGrant != null && _hasBearerToken(server)) {
+        final fresh = await _reGrant(server);
+        if (fresh != null) {
+          _connections.remove(server.id);
+          notifyListeners();
+          return _connect(fresh, allowReGrant: false);
+        }
+      }
       info.state = ConnectionState.error;
       info.error = e.toString();
       notifyListeners();
       _logger.logError('Connect failed', e, st, {'serverId': server.id});
       return ConnectionResult.failure(e.toString());
     }
+  }
+
+  bool _hasBearerToken(ServerConfig server) =>
+      (server.transportConfig['accessToken'] as String?)?.isNotEmpty ?? false;
+
+  /// Invoke the host re-grant hook. Returns a refreshed [ServerConfig] only when
+  /// the hook produced a genuinely new token; otherwise null (→ surface the
+  /// original failure). Hook errors are swallowed to a null so a failing
+  /// re-grant never masks the real connect error.
+  Future<ServerConfig?> _reGrant(ServerConfig stale) async {
+    try {
+      final fresh = await tokenReGrant!(stale);
+      if (fresh != null &&
+          fresh.transportConfig['accessToken'] !=
+              stale.transportConfig['accessToken']) {
+        _logger.info('Re-granted server token — retrying connect',
+            {'serverId': stale.id});
+        return fresh;
+      }
+    } catch (e, st) {
+      _logger.logError('Token re-grant failed', e, st, {'serverId': stale.id});
+    }
+    return null;
   }
 
   /// Transport dropped on its own (not an explicit [disconnect] call). Mark the

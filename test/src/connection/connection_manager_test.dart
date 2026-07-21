@@ -243,4 +243,80 @@ void main() {
       expect(events, contains(ConnectionState.connected));
     });
   });
+
+  group('ConnectionManager durable reconnect (token re-grant)', () {
+    ServerConfig tokenServer(String token) => ServerConfig(
+          id: 's1',
+          name: 'srv',
+          description: 'd',
+          transportType: TransportType.streamableHttp,
+          transportConfig: {'baseUrl': 'https://x', 'accessToken': token},
+        );
+
+    test('TC-CONN-REGRANT-001: a token-bearing server whose connect fails is '
+        're-granted a fresh token and retried once → success', () async {
+      var connectCalls = 0;
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      final m = ConnectionManager(connector: (_) async {
+        connectCalls++;
+        if (connectCalls == 1) {
+          throw StateError('Failed to connect: 401 Authentication required');
+        }
+        return client;
+      });
+      var reGrantCalls = 0;
+      m.tokenReGrant = (stale) async {
+        reGrantCalls++;
+        return stale.copyWith(transportConfig: {
+          ...stale.transportConfig,
+          'accessToken': 'fresh',
+        });
+      };
+
+      final result = await m.connect(tokenServer('stale'));
+
+      expect(result.success, isTrue);
+      expect(connectCalls, 2, reason: 'stale attempt + fresh retry');
+      expect(reGrantCalls, 1, reason: 're-grant invoked exactly once');
+      expect(m.getConnection('s1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-REGRANT-002: no hook wired → failure surfaces unchanged '
+        '(prior behaviour, no retry)', () async {
+      var connectCalls = 0;
+      final m = ConnectionManager(connector: (_) async {
+        connectCalls++;
+        throw StateError('boom');
+      });
+      final result = await m.connect(tokenServer('stale'));
+      expect(result.success, isFalse);
+      expect(connectCalls, 1);
+    });
+
+    test('TC-CONN-REGRANT-003: no bearer token → hook never called '
+        '(discovered board / no-auth server untouched)', () async {
+      var reGrantCalls = 0;
+      final m = ConnectionManager(connector: (_) async => throw StateError('x'))
+        ..tokenReGrant = (stale) async {
+          reGrantCalls++;
+          return null;
+        };
+      final result = await m.connect(_server()); // stdio, no accessToken
+      expect(result.success, isFalse);
+      expect(reGrantCalls, 0);
+    });
+
+    test('TC-CONN-REGRANT-004: hook yields null (or unchanged token) → original '
+        'failure, no retry loop', () async {
+      var connectCalls = 0;
+      final m = ConnectionManager(connector: (_) async {
+        connectCalls++;
+        throw StateError('boom');
+      })..tokenReGrant = (stale) async => null;
+      final result = await m.connect(tokenServer('stale'));
+      expect(result.success, isFalse);
+      expect(connectCalls, 1, reason: 'null re-grant → no fresh retry');
+    });
+  });
 }

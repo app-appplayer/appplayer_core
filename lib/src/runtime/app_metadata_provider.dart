@@ -9,8 +9,7 @@ import '../logging/logger.dart';
 import '../metadata/app_metadata.dart';
 import '../metadata/app_metadata_sink.dart';
 
-/// Fetches and publishes `AppMetadata` from Online / Local Bundle sources
-/// (MOD-RUNTIME-006, FR-META-001~005, UI DSL v1.2 §6.2).
+/// Fetches and publishes `AppMetadata` from Online / Local Bundle sources.
 class AppMetadataProvider {
   AppMetadataProvider({
     AppMetadataSink? sink,

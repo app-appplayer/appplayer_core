@@ -22,7 +22,7 @@ import 'package:brain_kernel/brain_kernel.dart'
         clientTools,
         standardTools;
 // `McpClientKernelHost` (the outbound mcp_client surface the `mcp.*`
-// tools drive) and the `connectExtension` seam helper (spec 08 §4) live
+// tools drive) and the `connectExtension` seam helper live
 // outside the main barrel.
 import 'package:brain_kernel/mcp_host.dart'
     show McpClientKernelHost, connectExtension;
@@ -97,7 +97,7 @@ class _JsToolWireState {
 
 /// MCP Serving 1.0 — well-known resource URI carrying the whole bundle
 /// document (manifest metadata + sections) for `resources/read`. Reuses the
-/// existing `bundle://` scheme (mcp_ui_dsl §11.5); no new scheme.
+/// existing `bundle://` scheme; no new scheme.
 const String _bundleDocumentUri = 'bundle://manifest.json';
 
 /// Top-level entrypoint assembling Connection / Runtime / Session / Dashboard /
@@ -141,7 +141,7 @@ class AppPlayerCoreService {
 
   // Platform integration foundation (FR-PLATFORM). Constructed in
   // `initialize`; NoOp ports keep pure-Dart hosts working when the shell
-  // injects nothing. See `docs/03_DDD/platform-integration-foundation.md`.
+  // injects nothing.
   late final BackgroundExecutionPort _background;
   late final PlatformPermissionPort _permissions;
   late final AppNotificationPort _notifications;
@@ -193,10 +193,9 @@ class AppPlayerCoreService {
   /// the transport's platform / FFI dependencies — the calling app owns those.
   /// Returns a connection whose `callTool` / `readResource` / `listTools`
   /// reach the remote server (e.g. `led.set`, `ui://app`).
-  /// See `specs/platform/08-extension.md` §4.
   ///
   /// The seam is resolved off the abstract `KernelClientHost` via the
-  /// canonical [connectExtension] helper (spec 08 §4) — no concrete
+  /// canonical [connectExtension] helper — no concrete
   /// client-host reference is held.
   Future<KernelClientConnection> connectExtensionTransport({
     required String id,
@@ -447,7 +446,7 @@ class AppPlayerCoreService {
     // even when KV / LLM are not injected by using in-memory and stub
     // ports; real resources land in a follow-up round. The boot is
     // wrapped in try/catch so a brain_kernel failure does not bring
-    // down chrome (a safety net while the knowledge-operations.md gaps
+    // down chrome (a safety net while the knowledge-operations gaps
     // 1–3 fixes are still rolling out).
     try {
       _kernel = await KernelApp.boot(
@@ -463,8 +462,8 @@ class AppPlayerCoreService {
         // these are app-driven programmatic connections.
         clientHost: McpClientKernelHost(),
       );
-      // Register the standard tool surface (knowledge-operations.md §5
-      // Layer 2) with the in-process dispatcher. Adapt the kernel
+      // Register the standard tool surface (Layer 2) with the in-process
+      // dispatcher. Adapt the kernel
       // handler type (`Future<Object?>`) into the dispatcher's
       // `Future<dynamic>` typedef.
       final tools = standardTools(_kernel!);
@@ -484,7 +483,7 @@ class AppPlayerCoreService {
       }
       _toolDispatcher.registerInProcessTools(adapted);
       // bundle_host_bridge — owns session lifecycle + Zone-scoped
-      // scopeId + kb:// URI resolution (PORTING_GUIDE §5b). Created
+      // scopeId + kb:// URI resolution. Created
       // after the kernel boot so `systemResolver` always returns a
       // booted KnowledgeSystem.
       _bridge = BundleSessionBridge(
@@ -737,7 +736,7 @@ class AppPlayerCoreService {
         onMcpLogMessage: _onMcpLogMessage,
       );
 
-      // MCP Serving 1.0 (specs/mcp_serving/spec/1.0) — if the server exposes
+      // MCP Serving 1.0 — if the server exposes
       // the bundle document, reconstruct the McpBundle and activate its
       // declarative sections (knowledge / settings / behavior / tool
       // declarations) so they come live, identical to a local bundle. Tool
@@ -903,7 +902,7 @@ class AppPlayerCoreService {
     );
   }
 
-  /// MCP Serving 1.0 (specs/mcp_serving/spec/1.0) — activate a bundle's
+  /// MCP Serving 1.0 — activate a bundle's
   /// declarative sections (knowledge / settings / behavior / tool
   /// declarations) on the kernel, open a bridge session, expose the bundle
   /// document at `bundle://manifest.json`, and wire in-process JS tools.
@@ -1301,6 +1300,18 @@ class AppPlayerCoreService {
   SettingsStore get settings {
     _assertReady();
     return _settingsStore;
+  }
+
+  /// Wire the durable-reconnect token re-grant (see [ServerReGrant]). Call once
+  /// after [initialize], when the marketplace session exists (capabilities are
+  /// built after composition). A stale marketplace connectionToken is then
+  /// silently refreshed on connect / reconnect / health-monitor auto-reconnect
+  /// instead of requiring a manual reinstall. Pass null to clear it. Hosts
+  /// without a marketplace (Standard / hand-typed / discovered) never call this,
+  /// so their connect behaviour is unchanged.
+  set serverReGrant(ServerReGrant? hook) {
+    _assertReady();
+    _conn.tokenReGrant = hook;
   }
 
   //

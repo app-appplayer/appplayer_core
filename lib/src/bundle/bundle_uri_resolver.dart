@@ -11,8 +11,7 @@ class ResolvedBundleUri {
   final String mediaType;
 }
 
-/// Resolves `bundle://` URIs into runtime-consumable URIs (MOD-BUNDLE-003,
-/// FR-BUNDLE-003 / FR-APP-LOCAL-005, UI DSL v1.2 §5.3).
+/// Resolves `bundle://` URIs into runtime-consumable URIs.
 class BundleUriResolver {
   BundleUriResolver({
     String? bundleRootPath,

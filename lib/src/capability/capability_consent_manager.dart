@@ -1,6 +1,4 @@
 /// Per-app capability consent + enforcement (FR-CAP).
-///
-/// See `docs/03_DDD/platform-integration-foundation.md` §4.6, §6.
 library;
 
 import '../logging/logger.dart';

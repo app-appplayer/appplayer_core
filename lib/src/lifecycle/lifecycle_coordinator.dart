@@ -4,8 +4,6 @@
 /// the [BackgroundPolicy] and routes background wake events. Pure Dart —
 /// driven by [onPhase] / the injected wake stream — so it is unit-testable
 /// without a widget binding.
-///
-/// See `docs/03_DDD/platform-integration-foundation.md` §4.1.
 library;
 
 import 'dart:async';

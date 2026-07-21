@@ -19,6 +19,9 @@ export 'src/session/app_handle.dart';
 export 'src/connection/connection_info.dart';
 export 'src/connection/connection_result.dart';
 export 'src/connection/connection_state.dart';
+// Durable-reconnect token re-grant hook (host-provided). Only the typedef is
+// public; the ConnectionManager itself stays internal.
+export 'src/connection/connection_manager.dart' show ServerReGrant;
 export 'src/connection/connection_health_monitor.dart'
     show HealthMonitorConfig;
 
@@ -102,7 +105,6 @@ export 'src/settings/settings_store.dart';
 // consent, and notifications. Hosts inject the shell-provided seams
 // (ConsentPrompt, ConsentStore, BackgroundPolicy); NoOp implementations
 // keep pure-Dart hosts working without native support.
-// See `docs/03_DDD/platform-integration-foundation.md`.
 export 'src/lifecycle/lifecycle_coordinator.dart';
 export 'src/background/background_policy.dart';
 export 'src/background/background_execution_port.dart';

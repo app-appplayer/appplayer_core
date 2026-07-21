@@ -2,7 +2,7 @@
 ///
 /// Foreground: an internal periodic timer per job. Background: delegated to
 /// [BackgroundExecutionPort.runBackgroundJob] (platform WorkManager /
-/// BGTaskScheduler). See `docs/03_DDD/platform-integration-foundation.md` §4.4.
+/// BGTaskScheduler).
 library;
 
 import 'dart:async';

@@ -1,5 +1,4 @@
-/// Wiring regression — TC-KERNEL-* + TC-BRIDGE-* per
-/// `docs/04_TEST/{kernel,bridge}.md`. AppPlayer Core verifies the
+/// Wiring regression — kernel + bridge wiring. AppPlayer Core verifies the
 /// boot / activation / dispose wiring only; the underlying KernelApp +
 /// BundleSessionBridge behaviour is owned by `brain_kernel`'s own
 /// regression suite (kernel_app_test, standard_tools_test, bridge
@@ -110,6 +109,5 @@ void main() {
   // brain_kernel's regression suite (BundleActivation + Registry +
   // SessionRegistry + DispatchContext); AppPlayer Core's contribution
   // is the wiring itself, verified above through boot / standardTools /
-  // setActiveSession / dispose. See `docs/04_TEST/kernel.md` ·
-  // `bridge.md` for the delegation note.
+  // setActiveSession / dispose.
 }

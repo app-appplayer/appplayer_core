@@ -1,7 +1,6 @@
 /// Background continuity policy + wake events (FR-BGX-005, FR-BGX-004).
 ///
-/// Part of the Platform Integration Foundation
-/// (`docs/03_DDD/platform-integration-foundation.md`).
+/// Part of the Platform Integration Foundation.
 library;
 
 /// How a connection behaves when the app enters the background.

@@ -1,7 +1,7 @@
 /// App capability model + consent seams (FR-CAP).
 ///
 /// Bundles/server apps must request capabilities explicitly; the user grants
-/// or denies per-app. See `docs/03_DDD/platform-integration-foundation.md`.
+/// or denies per-app.
 library;
 
 import 'dart:async';

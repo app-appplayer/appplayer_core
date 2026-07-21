@@ -20,8 +20,7 @@ abstract class AppSession {
   /// Pro launcher, etc.) read the declaration regions of the manifest
   /// — `wiring` (lifecycle / domainActions / chat / lifecycleState),
   /// `settings.sections`, `chat.slashCommands`, etc. — directly and map
-  /// them onto their own chrome surfaces (mcp_bundle spec 1.0 §6 wiring
-  /// and the settings section).
+  /// them onto their own chrome surfaces (wiring and the settings section).
   McpBundle? get bundle;
 
   /// Builds the Flutter widget tree for this session. Tool call / resource
@@ -32,14 +31,14 @@ abstract class AppSession {
     VoidCallback? onExit,
   });
 
-  /// Spec §11.9 dashboard rendering entry point. Returns `null` when the
+  /// Dashboard rendering entry point. Returns `null` when the
   /// DSL declares no `dashboard` block — the host should fall back to a
-  /// default card derived from [metadata] per §11.9.1. The returned
+  /// default card derived from [metadata]. The returned
   /// widget hosts only the `dashboard.content` subtree and re-evaluates
   /// bindings on `dashboard.refreshInterval`.
   ///
-  /// [onOpenApp] is invoked for DSL `navigation:openApp` actions (spec
-  /// §4.3.1) fired from within the dashboard subtree — hosts use this
+  /// [onOpenApp] is invoked for DSL `navigation:openApp` actions
+  /// fired from within the dashboard subtree — hosts use this
   /// to transition the launcher to the full application view.
   Widget? buildDashboardWidget({
     required BuildContext context,
