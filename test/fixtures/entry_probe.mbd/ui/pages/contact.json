@@ -1,0 +1,6 @@
+{
+  "type": "page",
+  "title": "Contact",
+  "route": "/contact",
+  "content": {"type": "text", "content": "{{entry.params.plate}}"}
+}

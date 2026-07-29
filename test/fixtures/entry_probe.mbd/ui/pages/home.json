@@ -1,0 +1,6 @@
+{
+  "type": "page",
+  "title": "Home",
+  "route": "/home",
+  "content": {"type": "text", "content": "home"}
+}

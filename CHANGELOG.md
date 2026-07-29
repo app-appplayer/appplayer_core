@@ -1,4 +1,57 @@
+## 0.1.15 - 2026-07-28 - Multi-origin composition (MCP UI DSL v1.4 Composition Profile)
+
+### Added — entry context on the open paths (platform spec 19 §4.3, MCP UI DSL §8.9)
+
+- **`openAppFromServer(..., entry:, identity:)` and `openAppFromBundle(..., entry:, identity:)`** — carry how an app was reached and who is looking at it. An `entry` naming a route opens the app **on that page** instead of its own `initialRoute`, which is what lets a scanned code, a deep link, or an app-to-app open land where it asked. Both parameters are optional and absent for a launcher open, so every existing call is unchanged.
+- Re-exports the entry value types (`EntryContext`, `EntryIssuer`, `EntryNotice`, `IdentityContext`, `IdentityState`, `IdentitySubjectKind`, `EntrySession`, `EntryStateKeys`) so a host consuming only `appplayer_core` can build them.
+
+- **Deferred entry** (`DeferredEntryResolver`, `DeferredEntrySource`, `FirstLaunchStore`) — an entry that sent someone to an app store resumes on first launch (§3.5). The policy is pure and the platform pieces are injected, so the rules hold on a platform that can carry a code and on one that cannot.
+  - **The absence of a source is meaningful.** A host with no mechanism supplies none, and that turns the obligation into an offer of manual recovery rather than silence. A source that answers "this install did not begin at an entry" produces nothing instead — prompting there would be a question about something that never happened.
+  - A mechanism that threw is treated as a mechanism we do not have.
+  - The launch is marked seen either way: a recovery offered twice is a nag, and a code recovered twice would reopen the same entry on a launch nobody connected to it.
+- **`EntryOpener`** — turns a resolved target into an open session. Tiers differ in chrome, not in what a target means: "a server target is an endpoint you register and open" is the same sentence everywhere, so it stopped being rewritten per tier. A server learned from an entry is registered under an id derived from its endpoint, so scanning the same medium twice reuses one row instead of accumulating one per scan. `localServer` needs a discoverer the tier wires (discovery is a host capability); without one the entry fails visibly rather than dialling something else. A `listing` deliberately has no path to a screen here — acquisition is the marketplace's act, and a path from a listing id to a render would blur install and run.
+- **`EntryLink.parse`** — reads the opaque code out of a claimed https link. Host matching is **exact**: a suffix match would accept `evil-entry.example.test` for `entry.example.test`, and a build resolving codes from a host it does not claim is resolving someone else's registry. Everything after the path prefix is the code, so an issuer may partition its code space however it likes and this side stays ignorant of the shape. A link this build does not claim is **rejected with a reason**, not swallowed — the host falls through to whatever it normally does with a URL.
+- **Entry resolution pipeline** (`EntryResolverPort`, `EntryPipeline`, `EntryTarget` and friends) — the host side of platform spec 19. Every acquisition path (an intercepted link, a scanner, a deferred entry recovered after an install) produces the same code and takes this one path, so the rules hold whichever door the code came through. The resolver itself is a port: the platform never assumes where the medium registry lives.
+  - **`canIdentify`** — a build with no sign-in refuses a `required` entry instead of rendering it as a guest. Answering a demand for identity by ignoring it produces a screen that looks like it worked, which is the failure mode this whole layer exists to prevent. Distinct from an unsupported target: the destination is fine, the viewer cannot be established.
+  - Enforced here because each of these failures is invisible from the outside: a stale answer is never replayed (custody may have changed since it was minted), a guest entry never resolves to an account-gated target, and an entry this host cannot open is **reported rather than substituted** — a silently swapped target looks exactly like a working one.
+  - Wire parsing defaults to the safe reading: an unknown `status` is not `ok`, and an unparsed `identityPolicy` demands identity rather than assuming guest. Guessing `open` would render a guest surface for an entry we failed to understand; guessing `required` merely asks someone to sign in.
+  - `EntryTarget.toEntryContext()` is the only thing that crosses into the document — route, params, issuer, grant **scope**. The grant token and the medium's owner/holder never do.
+- **`launchRoute:`** alongside `entry:` on both open paths. An in-app open (DSL §4.3.1 `navigation.openApp`) names a page without being an arrival, so it sets the route and leaves the document's `entry.*` tree absent (§8.9.1).
+- **`AppSession.launchRouteMissing`** — true when the entry named a page this app no longer declares. Spec 19 §9.6 puts the disclosure on the host, and a host cannot render a log line; without a surface to read, "fell back" and "worked" are the same outcome from outside.
+
+A route the app no longer declares is **not** honoured silently: the runtime falls back to the app's own initial route and the miss is logged (`entry.route.missing`) for the host to disclose. A stale binding that quietly renders the home page is indistinguishable from a working one, and bindings outlive app versions.
+
+Re-opening a handle whose runtime is still alive adopts the newer entry. Without that the same medium scanned twice would render the first scan's context.
+
+### Added
+- **`openSavedDeviceAsOrigin(id)`** — opens a saved device as a composition origin through the same `ConnectionManager` the launcher uses, and **`adoptConnectionAsOrigin({id, client})`** under it. Origins used to be opened on a private stack while the launcher used its own, both keyed by the same device id, so neither could see the other's link: opening a device from a composed screen and then from its own app dialled twice, and the board — single-peer — refused the second with `Transport disconnected`. One connection per device now, shared by both.
+
+### Fixed
+- Opening a device's own screen silenced every composed tile watching the same device — permanently, and with nothing to show for it: the subscription stayed live, the socket stayed up, and closing the screen did not bring it back. `Client.onNotification` keeps one handler per method, so once one connection per device is shared the notification router took the slot from the kernel connection the tiles listen on. Both now register through `SharedClientNotifications`, which takes the slot once and fans out. Subscriptions are reference-counted the same way (`SharedResourceSubscriptions`), so one consumer releasing no longer stops the other's stream.
+- A composed tile re-read the device's UI document on **every** mount. The connection was never dropped — the socket stayed up across open and close — but entering the screen again cost `ui://app` + `ui://page/main` over the wire, so the tile spun and looked like it was reconnecting while the standalone screen came back instantly. Resolved definitions are now cached per origin and dropped when the origin is (re)opened, which is the only moment the document can have changed: a device that rebooted with new UI necessarily got a new connection first. Measured after the fix: re-entry 1.1s against 1.2s for the first open, both tiles fully rendered. (Fixed in the `composition_host` recipe and re-vendored.)
+- Composition treated "the host lists this connection id" as "the origin is
+  open". A connection whose link had gone was still listed, so a composed tile
+  decided it had nothing to open and never asked again while every call it made
+  landed on a dead link — the device worked when opened on its own and never
+  appeared in a multi-device screen. Openness is now decided by liveness.
+  (Fixed in the `composition_host` recipe and re-vendored.)
+
+### Added
+- **`registerDefinitionResolver(resolve)`** — the host resolver behind a `view` / route `DefinitionSource` that names an origin. Registering it is how this host **claims** the Composition Profile; without it `view` fails closed and renders its `fallback` rather than resolving a foreign `$ref` against the app's own server (spec §18.7.3), which would put one device's UI under another's identity.
+- **`useKernelDefinitionResolver({readOwn})`** — the canonical wiring, reading through the kernel's outbound `mcp.*` surface. Platform spec `06-tool-registry.md` already declares "the app/bundle drives `mcp.*` directly and fetches a resource (e.g. a dashboard UI)" as the default path, and those tools are already on this host's in-process dispatcher — so composition needs **no new transport, no new connection registry, and no manifest field**, only a reader. Parses the shape a board actually serves (`contents[0].text` carrying escaped JSON) and accepts an already-decoded map.
+- The registered resolver is applied to every app/bundle runtime at creation, alongside the existing stream sources.
+- **`openOrigin` hook** — a document names an origin; the host opens it on first use. Registering a device does not hold a connection open, and holding one would be wrong: several boards serve a single peer at a time, so a permanent connection each has the last one to connect reset the others.
+- **Origin-scoped acting and watching** — the resolver wiring now also installs a tool caller and a resource watcher for a named origin. Rendering and acting are separate halves and only the first existed: a composed screen drew each device's UI while every control in it reached a session with no client for that device, and a live reading rendered its label and never a value. Tool calls go out as `mcp.call_tool` on the named connection; a watch reads the current value once (a subscription reports only *changes*) and then follows `notifications/resources/updated`.
+
+### Security
+- Fails closed by design: an empty origin with no `readOwn`, an unrecognised origin key, and an empty connection id all throw rather than falling back to the app's own server (spec §7.10.1 rule 6).
+
+### Changed
+- `flutter_mcp_ui_runtime` floor raised `^0.5.2 → ^0.5.3` (the `view` widget + `registerDefinitionResolver` seam).
+- `brain_kernel` floor raised `^0.1.8 → ^0.2.0` (resource subscription on a kernel connection).
+
 ## 0.1.14 - 2026-07-22 - Durable reconnect (token re-grant seam)
+
 
 Additive (0.x → patch). No public API removed.
 

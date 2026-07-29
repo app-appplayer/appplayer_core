@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show File, Platform;
 import 'dart:ui' show Brightness;
 
+import 'composition_host_vendored.dart';
 import 'package:flutter/foundation.dart'
     show Listenable, ValueListenable, kIsWeb, visibleForTesting;
 import 'package:flutter/widgets.dart' show GlobalKey, RepaintBoundary, Widget;
@@ -25,8 +26,8 @@ import 'package:brain_kernel/brain_kernel.dart'
 // tools drive) and the `connectExtension` seam helper live
 // outside the main barrel.
 import 'package:brain_kernel/mcp_host.dart'
-    show McpClientKernelHost, connectExtension;
-import 'package:mcp_client/mcp_client.dart' show ClientTransport;
+    show ExtensionTransportConnect, McpClientKernelHost, connectExtension;
+import 'package:mcp_client/mcp_client.dart' show Client, ClientTransport;
 import '../bundle/bundle_application_adapter.dart';
 import '../js/atom_category.dart';
 import '../js/atoms/agent_atom.dart';
@@ -203,6 +204,62 @@ class AppPlayerCoreService {
   }) =>
       connectExtension(_kernel?.clientHost, id: id, transport: transport);
 
+  /// Make a connection this host ALREADY holds usable as a composition
+  /// origin, under [id] — one device, one connection.
+  ///
+  /// A device opened from the launcher lives in [connections]; a `view` that
+  /// names the same device must ride that link rather than dial its own. Most
+  /// embedded boards serve a single peer, so a second dial is refused and the
+  /// composed tile fails on a device that is plainly working. Where a second
+  /// link is allowed it still splits subscriptions and health tracking in two.
+  ///
+  /// The adopted client keeps its original owner: closing the origin
+  /// deregisters it, it does not disconnect the user's app. Ending a device
+  /// connection stays an explicit user action.
+  Future<KernelClientConnection> adoptConnectionAsOrigin({
+    required String id,
+    required Client client,
+  }) async {
+    final clientHost = _kernel?.clientHost;
+    if (clientHost is! ExtensionTransportConnect) {
+      throw StateError(
+        'client host does not support adopting a host-held connection '
+        '(not an ExtensionTransportConnect)',
+      );
+    }
+    return (clientHost as ExtensionTransportConnect)
+        .adoptClient(id: id, client: client);
+  }
+
+  /// Open the saved device [id] as a composition origin — one device, one
+  /// connection.
+  ///
+  /// Runs through the same [ConnectionManager] the launcher uses, so the link
+  /// this creates is the one a later standalone open finds, and a device the
+  /// user already opened is reused rather than dialled again. Opening origins
+  /// on a private stack is what made a device reachable from one screen and
+  /// refused from the other: most of these boards serve a single peer.
+  ///
+  /// Throws when the id is not a saved device or the device cannot be reached.
+  Future<KernelClientConnection> openSavedDeviceAsOrigin(String id) async {
+    _assertReady();
+    final held = _conn.connections[id]?.client;
+    if (held != null && held.isConnected) {
+      return adoptConnectionAsOrigin(id: id, client: held);
+    }
+    final saved = await getServer(id);
+    if (saved == null) {
+      throw StateError('origin "$id" is not a known device');
+    }
+    final result = await _conn.connect(saved);
+    final client = result.connection?.client;
+    if (!result.success || client == null) {
+      throw StateError('could not reach origin "$id"'
+          '${result.error == null ? '' : ' — ${result.error}'}');
+    }
+    return adoptConnectionAsOrigin(id: id, client: client);
+  }
+
   /// Register additional in-process capability tools after boot — e.g. a
   /// desktop io / device tool-pack (`io.*`). Host-injected and opt-in: the
   /// core depends on no capability package, so platform-specific adapters
@@ -230,6 +287,130 @@ class AppPlayerCoreService {
         String scheme,
         Stream<dynamic> Function(String uri, Map<String, dynamic> params) open
       })> _streamSources = [];
+
+  /// Resolves a `view`/route `DefinitionSource` that names an origin
+  /// (MCP UI DSL v1.4 §1.9, Composition Profile). Set by [registerDefinitionResolver].
+  Future<Map<String, dynamic>> Function(
+      String ref, Map<String, dynamic> origin)? _definitionResolver;
+
+  /// Runs a tool against a named origin — the acting half of the Composition
+  /// Profile. Set by [useKernelDefinitionResolver] alongside the resolver,
+  /// because a host that can render another origin's UI but not act on it
+  /// ships a screen that looks finished and does nothing.
+  Future<dynamic> Function(
+      Map<String, dynamic> origin,
+      String tool,
+      Map<String, dynamic> params)? _originToolCaller;
+
+  /// Watches a resource on a named origin — the live half. Set alongside the
+  /// tool caller, because a composed screen that can act on a device but never
+  /// track it shows a reading's label and no value.
+  Future<void Function()> Function(
+    Map<String, dynamic> origin,
+    String uri,
+    void Function(dynamic contents) onUpdate,
+  )? _originResourceWatcher;
+
+  /// One-shot read on a named origin. Separate from the watcher so a view that
+  /// only reads does not leave a device streaming to it.
+  Future<Object?> Function(Map<String, dynamic> origin, String uri)?
+      _originResourceReader;
+
+  /// The registered composition resolver, or `null` when this host does not
+  /// claim the Composition Profile. Exposed so a host (or its tests) can
+  /// verify its own claim and drive the exact production resolution path
+  /// rather than a parallel one.
+  Future<Map<String, dynamic>> Function(String ref, Map<String, dynamic> origin)?
+      get definitionResolver => _definitionResolver;
+
+  /// Register the resolver that backs multi-origin composition — one bundle
+  /// rendering definitions served by several MCP servers (spec v1.4 §6.11).
+  ///
+  /// Registering it is how this host CLAIMS the Composition Profile. Without
+  /// it `view` fails closed and renders its `fallback` rather than resolving a
+  /// foreign `$ref` against the app's own server (§18.7.3) — which would put
+  /// one device's UI under another's identity.
+  ///
+  /// [resolve] receives the resource uri and the `Origin` map (`{}` when the
+  /// source named no origin). It MUST throw on an unknown origin or a failed
+  /// read; returning a substitute is exactly the confusion the spec forbids.
+  ///
+  /// The default wiring is [useKernelDefinitionResolver], which reads through
+  /// the kernel's outbound `mcp.*` surface. It is opt-in so a host with no
+  /// outbound client stays non-composing.
+  void registerDefinitionResolver(
+    Future<Map<String, dynamic>> Function(String ref, Map<String, dynamic> origin)
+        resolve,
+  ) {
+    _definitionResolver = resolve;
+  }
+
+  /// Claim the Composition Profile using the kernel's own `mcp.*` tools.
+  ///
+  /// This is the canonical wiring: platform spec `06-tool-registry.md` already
+  /// declares "the app/bundle drives `mcp.*` directly and fetches a resource
+  /// (e.g. a dashboard UI)" as the default path, and those tools are already on
+  /// this host's in-process dispatcher. So composition needs no new transport,
+  /// no new connection registry, and no manifest field — only a reader.
+  ///
+  /// An `Origin` of `{connection: id}` reads through that connection;
+  /// an empty origin reads the app's own server via the session's page loader,
+  /// which the caller supplies as [readOwn].
+  /// [openOrigin] — host hook that opens a named origin on demand.
+  ///
+  /// A `view` names a connection; it does not open one. Registering a device
+  /// does not hold a connection open either, and holding one would be wrong:
+  /// a board serving MCP over TCP is often **single-peer**, so a permanent
+  /// connection per registered device makes the last one to connect reset the
+  /// others (measured on the bench as `Connection reset by peer`). So the
+  /// origin is opened when a `view` first needs it and the device lifecycle
+  /// stays with the host, which is the only party that knows the transport.
+  ///
+  /// Called only when the origin is not already connected. Throwing (or
+  /// leaving the origin unconnected) makes that one `view` render its
+  /// `fallback`; siblings are unaffected.
+  void useKernelDefinitionResolver({
+    Future<Map<String, dynamic>> Function(String uri)? readOwn,
+    Future<void> Function(String connectionId)? openOrigin,
+  }) {
+    // Built by the `composition_host` recipe rather than here. The wiring is
+    // not AppPlayer-specific — any host with a kernel client host claims the
+    // profile the same way — and a second copy is how one host ends up with
+    // acting or watching quietly missing while the other has it.
+    final hooks = buildCompositionHooks(
+      call: _toolDispatcher.callInProcess,
+      clientHost: () => _kernel?.clientHost,
+      openOrigin: openOrigin,
+      readOwn: readOwn,
+    );
+    registerDefinitionResolver(hooks.resolveDefinition);
+    _originToolCaller = hooks.callTool;
+    _originResourceWatcher = hooks.watchResource;
+    _originResourceReader = hooks.readResource;
+  }
+
+  /// Apply the registered definition resolver to a freshly-initialized runtime.
+  ///
+  /// Logged either way. A host that never claimed the Composition Profile and a
+  /// host that claimed it but failed to carry it into this runtime look
+  /// identical from the app: `view` renders its fallback and says the profile
+  /// is not implemented, with nothing to say which of the two happened.
+  void _applyDefinitionResolver(MCPUIRuntime runtime) {
+    final call = _originToolCaller;
+    if (call != null) runtime.registerOriginToolCaller(call);
+    final watch = _originResourceWatcher;
+    if (watch != null) runtime.registerOriginResourceWatcher(watch);
+    final read = _originResourceReader;
+    if (read != null) runtime.registerOriginResourceReader(read);
+    final resolve = _definitionResolver;
+    if (resolve != null) {
+      runtime.registerDefinitionResolver(resolve);
+      _logger.info('composition profile applied to runtime');
+    } else {
+      _logger.info('composition profile NOT claimed by this host — '
+          '`view` will fall back');
+    }
+  }
 
   /// Register a `client.mcpStream` source — e.g. a BLE scan hub for `ble://`.
   /// Applied to every app/bundle runtime after it initializes, so DSL bundles
@@ -630,19 +811,29 @@ class AppPlayerCoreService {
   /// [trustLevel] gates which `client.*` actions the runtime will
   /// execute. The launcher chooses a level per-app (default `basic`).
   /// See `flutter_mcp_ui_runtime/TrustLevel` for the hierarchy.
+  /// [entry] / [identity] carry how this app was reached and who is looking
+  /// at it (MCP UI DSL 8.9, platform spec 19). Both are absent for an app
+  /// opened from the launcher; an [entry] naming a route opens the app on
+  /// that page instead of its own initial route.
   Future<AppSession> openAppFromServer(
     String serverId, {
     TrustLevel trustLevel = TrustLevel.basic,
+    EntryContext? entry,
+    IdentityContext? identity,
+    String? launchRoute,
   }) async {
     _assertReady();
     return _withTenantGuard(
       serverId: serverId,
-      operation: () => _openFromServerImpl(serverId, trustLevel),
+      operation: () => _openFromServerImpl(
+          serverId, trustLevel, entry, identity, launchRoute),
     );
   }
 
-  Future<AppSession> _openFromServerImpl(
-      String serverId, TrustLevel trustLevel) async {
+  Future<AppSession> _openFromServerImpl(String serverId, TrustLevel trustLevel,
+      [EntryContext? entry,
+      IdentityContext? identity,
+      String? launchRoute]) async {
     final server = await _storage.getById(serverId);
     if (server == null) {
       throw ServerNotFoundException(serverId);
@@ -726,9 +917,14 @@ class AppPlayerCoreService {
         pageLoader: wrapped && appUri != null
             ? _appLoader.cachingPageLoaderFor(client, {appUri: loaded})
             : _appLoader.pageLoaderFor(client),
+        entry: entry,
+        identity: identity,
+        launchRoute: launchRoute,
       );
+      _reportLaunchRoute(runtime, entry?.route ?? launchRoute);
       runtime.setTrustLevel(trustLevel);
       _applyStreamSources(runtime);
+      _applyDefinitionResolver(runtime);
       _notifRouter.register(
         client: client,
         runtime: runtime,
@@ -819,10 +1015,29 @@ class AppPlayerCoreService {
     return metadata;
   }
 
+  /// Log an entry whose route this app no longer declares.
+  ///
+  /// The runtime already fell back to the app's own initial route; what must
+  /// not happen is that falling back looks like success. A stale binding that
+  /// silently renders the home page is indistinguishable from a working one,
+  /// so the miss is surfaced here for the host to disclose (spec 19 §4.3).
+  void _reportLaunchRoute(MCPUIRuntime runtime, String? requested) {
+    if (requested == null) return;
+    if (runtime.engine.routeManager?.launchRouteMissing ?? false) {
+      _logger.warn('launch.route.missing', {
+        'requested': requested,
+        'rendered': runtime.engine.routeManager?.initialRoute,
+      });
+    }
+  }
+
   /// FR-CORE-003 — Local Bundle path (`McpBundle` file / inline JSON).
   Future<AppSession> openAppFromBundle(
     BundleRef bundleRef, {
     TrustLevel trustLevel = TrustLevel.basic,
+    EntryContext? entry,
+    IdentityContext? identity,
+    String? launchRoute,
   }) async {
     _assertReady();
     final bundle = await _bundleLoader.load(bundleRef);
@@ -830,12 +1045,15 @@ class AppPlayerCoreService {
 
     return _withTenantGuard(
       bundleId: bundleId,
-      operation: () => _openFromBundleImpl(bundle, trustLevel),
+      operation: () =>
+          _openFromBundleImpl(bundle, trustLevel, entry, identity, launchRoute),
     );
   }
 
-  Future<AppSession> _openFromBundleImpl(
-      McpBundle bundle, TrustLevel trustLevel) async {
+  Future<AppSession> _openFromBundleImpl(McpBundle bundle, TrustLevel trustLevel,
+      [EntryContext? launchEntry,
+      IdentityContext? identity,
+      String? launchRoute]) async {
     final bundleId = bundle.manifest.id;
     _bundleResolver.assertApplicationType(bundle);
     final entry = _bundleResolver.resolveEntry(bundle);
@@ -871,10 +1089,21 @@ class AppPlayerCoreService {
       await runtime.initialize(
         definition.json,
         pageLoader: definition.pageLoader,
+        entry: launchEntry,
+        identity: identity,
+        launchRoute: launchRoute,
       );
+      _reportLaunchRoute(runtime, launchEntry?.route ?? launchRoute);
+    } else if (launchEntry != null) {
+      // A runtime already built for this handle keeps its route, but the
+      // entry that reached it now is still the current one — a second scan of
+      // the same medium must not render the first scan's context.
+      runtime.entrySession.adoptEntry(launchEntry);
+      if (identity != null) runtime.entrySession.adoptIdentity(identity);
     }
     runtime.setTrustLevel(trustLevel);
     _applyStreamSources(runtime);
+    _applyDefinitionResolver(runtime);
 
     // Activate declarative sections, expose the bundle document, and wire
     // in-process JS tools. Shared with the served-bundle path

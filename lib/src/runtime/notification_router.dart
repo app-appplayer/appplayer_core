@@ -1,3 +1,5 @@
+import 'package:brain_kernel/mcp_host.dart'
+    show SharedClientNotifications;
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
 import 'package:mcp_client/mcp_client.dart' hide Logger;
 
@@ -34,8 +36,11 @@ class NotificationRouter {
     _logger.debug('Registering notification handlers',
         {'serverId': serverId});
 
-    client.onNotification('notifications/resources/updated',
-        (params) async {
+    // Through the fan-out: `onNotification` keeps one handler per method, so
+    // on a client shared with a composed tile watching the same device this
+    // registration used to take the slot and silence the tile for good.
+    SharedClientNotifications.add(
+        client, 'notifications/resources/updated', (params) async {
       try {
         _logger.debug('Resource update notification', {'params': params});
         if (!runtime.isInitialized) return;

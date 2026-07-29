@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0.0",
+  "manifest": {
+    "id": "com.example.entry_probe",
+    "name": "Entry Probe",
+    "version": "1.0.0",
+    "schemaVersion": "1.0.0",
+    "type": "application",
+    "entryPoint": "ui.app"
+  }
+}

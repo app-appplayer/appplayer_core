@@ -27,6 +27,14 @@ export 'src/connection/connection_health_monitor.dart'
 
 // Bundle handles / host ports
 export 'src/bundle/bundle_ref.dart';
+
+// Entry resolution (platform spec 19)
+export 'src/entry/deferred_entry.dart';
+export 'src/entry/entry_link.dart';
+export 'src/entry/entry_target.dart';
+export 'src/entry/entry_opener.dart';
+export 'src/entry/entry_pipeline.dart';
+export 'src/entry/http_entry_resolver.dart';
 export 'src/bundle/bundle_entry_point.dart';
 export 'src/bundle/bundle_fetcher.dart';
 export 'src/bundle/installed_app_bundle.dart';
@@ -80,8 +88,16 @@ export 'package:flutter_mcp_ui_core/flutter_mcp_ui_core.dart'
 // depends only on `appplayer_core`.
 export 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
     show
+        EntryContext,
+        EntryIssuer,
+        EntryNotice,
+        EntrySession,
+        EntryStateKeys,
         FormFactor,
         FormFactorScope,
+        IdentityContext,
+        IdentityState,
+        IdentitySubjectKind,
         ViewMode,
         ViewModeResolver,
         AppSpacing,

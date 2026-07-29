@@ -7,3 +7,9 @@ pubspec.lock
 # Build / coverage outputs
 build/
 coverage/
+
+# Local-only dependency overrides (never published; pub excludes them from the
+# package payload). Kept out of git so a release commit leaves a clean tree and
+# a clone never resolves against a path that exists only on one machine.
+pubspec_overrides.yaml
+**/pubspec_overrides.yaml

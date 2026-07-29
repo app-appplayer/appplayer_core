@@ -46,6 +46,16 @@ abstract class AppSession {
     void Function(String? appId, String? route)? onOpenApp,
   });
 
+  /// True when the entry that opened this session named a page this app no
+  /// longer declares (platform spec 19 §4.3).
+  ///
+  /// The session renders the app's own initial route in that case. The host
+  /// MUST NOT let that pass as success — spec 19 §9.6 requires it to say the
+  /// requested page was unavailable, and a home screen that looks identical
+  /// to a working entry is how a stale binding hides. Always false for a
+  /// session opened without an entry.
+  bool get launchRouteMissing;
+
   /// Unsubscribe resources and destroy the underlying runtime. The server
   /// connection (if any) is not terminated because another session may be
   /// sharing it — hosts disconnect explicitly via the connection manager

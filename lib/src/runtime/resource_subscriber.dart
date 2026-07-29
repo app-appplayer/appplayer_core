@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
+import 'package:brain_kernel/mcp_host.dart' show SharedResourceSubscriptions;
 import 'package:mcp_client/mcp_client.dart' hide Logger;
 
 import '../exceptions.dart';
@@ -28,7 +29,10 @@ class ResourceSubscriber {
     _logger.debug('Subscribing resource',
         {'uri': uri, 'binding': binding, 'ownerKey': ownerKey});
     try {
-      await client.subscribeResource(uri);
+      // Reference-counted: this client may be shared with a composed tile
+      // naming the same device. The server knows only "subscribed" or not, so
+      // whoever released first used to stop the other's stream.
+      await SharedResourceSubscriptions.subscribe(client, uri);
     } catch (e, st) {
       _logger.logError('subscribeResource failed', e, st, {'uri': uri});
       throw ResourceSubscriptionException(uri, cause: e);
@@ -70,7 +74,7 @@ class ResourceSubscriber {
   }) async {
     _logger.debug('Unsubscribing resource', {'uri': uri});
     try {
-      await client.unsubscribeResource(uri);
+      await SharedResourceSubscriptions.unsubscribe(client, uri);
     } catch (e, st) {
       _logger.logError('unsubscribeResource failed', e, st, {'uri': uri});
       throw ResourceSubscriptionException(uri, cause: e);

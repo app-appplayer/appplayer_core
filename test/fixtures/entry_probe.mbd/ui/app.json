@@ -1,0 +1,10 @@
+{
+  "type": "application",
+  "title": "Entry Probe",
+  "version": "1.0.0",
+  "initialRoute": "/home",
+  "routes": {
+    "/home": "ui://pages/home",
+    "/contact": "ui://pages/contact"
+  }
+}

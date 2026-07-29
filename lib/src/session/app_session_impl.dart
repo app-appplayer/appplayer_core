@@ -60,6 +60,10 @@ class AppSessionImpl implements AppSession {
   /// DSL's `mode: 'system'` resolves against the launcher's theme choice.
   final ValueListenable<Brightness>? hostBrightness;
 
+  @override
+  bool get launchRouteMissing =>
+      _runtime.engine.routeManager?.launchRouteMissing ?? false;
+
   final MCPUIRuntime _runtime;
   final ConnectionManager _conn;
   final RuntimeManager _runtimeManager;
