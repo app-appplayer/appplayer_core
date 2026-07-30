@@ -1,6 +1,6 @@
 name: appplayer_core
 description: AppPlayer Core — shared Flutter library for MCP server connection, bundle handling, and UI runtime orchestration.
-version: 0.1.15
+version: 0.1.16
 homepage: https://app-appplayer.github.io/makemind
 repository: https://github.com/app-appplayer/appplayer_core
 issue_tracker: https://github.com/app-appplayer/appplayer_core/issues
@@ -36,6 +36,9 @@ dependencies:
   # `host.mcp.callTool('bk.fact.write', {...})` is forwarded through
   # `ToolDispatcher.callInProcess` and resolves against the brain_kernel
   # facades.
+  # Worker + document APIs used by the web branch of the JS tool runtime.
+  web: ^1.1.0
+
   flutter_js: ^0.8.7
   meta: ^1.15.0
   uuid: ^4.2.2

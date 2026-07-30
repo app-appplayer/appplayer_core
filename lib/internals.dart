@@ -48,6 +48,7 @@ export 'src/tenant/tenant_resolver.dart';
 // process. Hosts that add custom atoms (fs / workspace / kb / ui / bus,
 // etc.) or that manage isolate lifecycle directly depend on these.
 export 'src/js/atom_category.dart';
+export 'src/js/js_bridge_protocol.dart';
 export 'src/js/js_tool_runtime.dart';
 export 'src/js/atoms/agent_atom.dart';
 export 'src/js/atoms/bundle_atom.dart';

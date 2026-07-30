@@ -1,3 +1,44 @@
+## 0.1.16 - 2026-07-29 - JavaScript tool runtime per platform
+
+### Changed
+- The per-bundle JavaScript runtime now resolves per platform. `JsToolIsolate`
+  became a conditional export: the existing embedded-engine implementation on
+  platforms with `dart:io`, and a Web Worker implementation elsewhere. The
+  native implementation is the same code, relocated to `js_tool_isolate_io.dart`
+  — no behavior change off the web.
+- The JS-side host bridge contract moved to `src/js/js_bridge_protocol.dart` and
+  is shared by both branches: `host.<atom>.<verb>()` returns a Promise resolved
+  through `__hostResolve` / `__hostReject` exactly as before. Only the transport
+  differs — an isolate port natively, `postMessage` on the web — so a bundle's
+  JavaScript behaves identically on both.
+
+### Added
+- Web branch of the JS tool runtime. Bundle JavaScript runs in a Web Worker,
+  never on the page: a Worker has its own global scope and no DOM, so the
+  bundle cannot reach the document, application state, storage or cookies.
+  Main-thread evaluation is not offered as an alternative path. Everything
+  crossing the boundary is a JSON string, so a bundle cannot hand the host a
+  live JavaScript object; a dispatcher error becomes a rejected Promise on the
+  JS side rather than a runtime failure.
+- `web` dependency, used only by that branch.
+
+### Fixed
+- The shared bootstrap parenthesises the transport call. A bare
+  `function (p) {...}` in statement position parses as a function *declaration*
+  and is rejected for having no name, so the host bridge failed to install.
+  This was introduced by the refactor and reached the native branch too, where
+  no test could see it — the embedded engine cannot start inside `flutter test`,
+  so nothing had ever executed that bootstrap. The browser suite now evaluates
+  the native variant of the string in a real engine, which closes that gap.
+
+### Notes
+- Hosting requirement for the web branch: the Worker is created from a blob, so
+  the page policy must allow `worker-src blob:`, and the Worker needs
+  `'unsafe-eval'` — executing caller-supplied JavaScript is the feature. This
+  fails far from its cause, so it is also recorded in the source.
+- This lifts `dart:ffi` out of the web dependency graph, which is what stopped
+  `flutter build web` for any application depending on this package.
+
 ## 0.1.15 - 2026-07-28 - Multi-origin composition (MCP UI DSL v1.4 Composition Profile)
 
 ### Added — entry context on the open paths (platform spec 19 §4.3, MCP UI DSL §8.9)
