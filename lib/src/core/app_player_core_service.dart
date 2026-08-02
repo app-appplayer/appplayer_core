@@ -618,7 +618,13 @@ class AppPlayerCoreService {
       logger: _logger,
       // Desktop does not suspend the process — window hide/minimize must not
       // pause or disconnect connections. Only mobile drives continuity pause.
-      platformSuspends: Platform.isAndroid || Platform.isIOS,
+      //
+      // `kIsWeb` comes first because `Platform` is `dart:io` and throws on the
+      // web; this line ran before the first frame, so the whole host rendered
+      // blank. False is also the truthful value there rather than a dodge — a
+      // tab has no process to suspend, and no native background port is
+      // injected for continuity to pause against.
+      platformSuspends: !kIsWeb && (Platform.isAndroid || Platform.isIOS),
     );
 
     // Boot brain_kernel so the bundle's 8 knowledge categories and the

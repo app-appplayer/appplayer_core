@@ -1,3 +1,42 @@
+## 0.1.17 - 2026-08-02 - Boot on the web
+
+### Fixed
+- `initialize` threw `Unsupported operation: Platform._operatingSystem` on the
+  web and took the whole host down before the first frame — a blank page. One
+  line built the `LifecycleCoordinator` with
+  `platformSuspends: Platform.isAndroid || Platform.isIOS`, and `Platform` is
+  `dart:io`. It is now `!kIsWeb && (...)`.
+
+  `false` is the truthful value on the web rather than a way around the throw:
+  a tab has no process to suspend, and no native background port is injected
+  for continuity to pause against. The value was also **not injectable** — the
+  coordinator takes the flag but `initialize` hardcoded it, so a host could not
+  work around this from outside. The neighbouring ports (`backgroundPort`,
+  `permissionPort`, `notificationPort`) all have seams and web hosts had
+  already passed them by injecting no-ops; this was the next line.
+
+  Reported against a release web build with source maps, so the frame was the
+  line and not a guess.
+
+### Verified
+
+Against the real app, both directions. `appplayer_cloud` in Chrome resolving
+this package from a local path booted with no exception; the same app with the
+published 0.1.16 rendered its error screen naming
+`app_player_core_service.dart 621:34`. Same app, same browser, one line
+different.
+
+### Not in this release — the browser regression
+
+A `@TestOn('browser')` boot regression is written
+(`test/integration/web_boot_test.dart`) and is **skipped**, because it hangs:
+headless Chrome loads and `initialize` never completes there, while the same
+`initialize` completes in the real app. The difference is what a host injects,
+so the harness — not the fix — is what is unfinished. It ships skipped with
+that reason attached rather than deleted, because the gap it names is real:
+every other test that calls `initialize` runs on the VM, which is why a
+`dart:io` call sat on the boot path unnoticed.
+
 ## 0.1.16 - 2026-07-29 - JavaScript tool runtime per platform
 
 ### Changed
