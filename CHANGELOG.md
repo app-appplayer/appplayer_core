@@ -1,3 +1,47 @@
+## 0.1.18 - 2026-08-02 - Install into host-provided storage; streams survive a background resume
+
+### Added
+- `AppPlayerCoreService.installBundleFromBytes` — install from `.mcpb`
+  bytes already in hand. A host that fetched the archive itself has bytes
+  and never a path; `installBundleFromFile` is the same call with a read
+  in front of it.
+- `AppPlayerCoreService` `bundleInstallStore:` — install into and read
+  installed bundles from host-provided storage instead of a directory.
+  When given, `bundleInstallRoot` is not used as one.
+- `BundleInstallerAdapter.onStore` and `BundleLoaderAdapter(installStore:)`
+  — the same seam one layer down.
+
+### Changed
+- `BundleApplicationAdapter` requires the bundle to carry readable files,
+  not a filesystem directory. A bundle installed into host storage now
+  adapts; previously it was refused outright with
+  `BundleAdaptException(unsupportedEntryPoint)` before anything was read.
+- JS tool entry scripts are read through the bundle's own file surface
+  rather than `File(<directory>/<entry>)`, so bundles that carry JS tools
+  work on hosts with no filesystem.
+
+Desktop and mobile behaviour is unchanged — omit `bundleInstallStore` and
+the filesystem path is taken exactly as before.
+
+### Fixed
+- An app left open across a background round trip stopped streaming. A
+  subscription and a notification handler both live on the CONNECTION, and
+  mobile tears the connection down in the background and rebuilds it with a
+  NEW client on return. Tool calls kept working (those resolve the live
+  client per call), so the screen looked healthy while only the stream was
+  dead — and pressing Subscribe again did nothing, because the runtime
+  binding had never been lost and there was nothing left for the runtime to
+  do. Re-attached on the new client:
+  - `ConnectionManager.onClientAttached` — hook fired whenever a server's
+    client is replaced (first connect included).
+  - `ResourceSubscriber.reattach` — re-issues the wire `resources/subscribe`
+    for every URI recorded under an `ownerKey`, plus the initial read so the
+    first value after a resume is current rather than the frozen one.
+    Bindings are NOT re-registered; they never went away.
+  - `AppPlayerCoreService` wires the two, covering the full-screen app AND
+    the dashboard's per-device summary runtime (a composed tile watching the
+    same device is otherwise the one surface still frozen).
+
 ## 0.1.17 - 2026-08-02 - Boot on the web
 
 ### Fixed

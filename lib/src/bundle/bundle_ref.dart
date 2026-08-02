@@ -24,14 +24,15 @@ class BundleRemoteRef extends BundleRef {
   final Map<String, String>? headers;
 }
 
-/// Bundle already installed on local disk as a `.mbd/` directory tree
-/// under Core's configured `bundleInstallRoot` (FR-BUNDLE-009).
+/// Bundle already installed under Core's configured bundle install
+/// destination (FR-BUNDLE-009).
 ///
-/// Core resolves this via `mcp_bundle.McpBundleLoader.loadInstalled`, which
-/// preserves `McpBundle.directory` so [BundleApplicationAdapter] can read
-/// `ui/app.json` and page resources as files. `BundleInlineRef` cannot
-/// substitute here: `McpBundle.toJson` deliberately omits `directory`, so
-/// a round-trip drops the filesystem anchor and trips
+/// Core resolves this through `mcp_bundle`, which preserves the bundle's
+/// backing files — a `.mbd/` directory on hosts that have a filesystem,
+/// a host-provided store on hosts that do not — so
+/// [BundleApplicationAdapter] can read `ui/app.json` and page resources.
+/// `BundleInlineRef` cannot substitute here: `McpBundle.toJson`
+/// deliberately omits that anchor, so a round-trip drops it and trips
 /// `BundleAdaptException(unsupportedEntryPoint)`.
 class BundleInstalledRef extends BundleRef {
   const BundleInstalledRef(this.bundleId);

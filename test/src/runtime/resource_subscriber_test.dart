@@ -116,4 +116,96 @@ void main() {
       );
     });
   });
+
+  /// Reconnect. A subscription belongs to the CONNECTION: after a background
+  /// round trip the link is torn down and rebuilt and the server has no
+  /// memory of what the old link subscribed. The runtime bindings survive in
+  /// the runtime, so nothing on screen looked wrong — the stream just stopped,
+  /// and pressing Subscribe again did nothing because the binding was already
+  /// registered. Only the wire call has to be redone, on the NEW client.
+  group('reattach after a reconnect', () {
+    test('re-issues the wire subscribe on the new client', () async {
+      when(() => client.subscribeResource('data://uptime'))
+          .thenAnswer((_) async {});
+      when(() => client.readResource('data://uptime'))
+          .thenAnswer((_) async => _result('{"uptime":1}'));
+
+      final subscriber = ResourceSubscriber();
+      await subscriber.subscribe(
+        client: client,
+        runtime: runtime,
+        uri: 'data://uptime',
+        binding: 'uptime',
+        ownerKey: 'srv-1',
+      );
+
+      // Only what the RECONNECT does is under test from here.
+      clearInteractions(runtime);
+      clearInteractions(state);
+
+      // The reconnect: a different Client object with no memory of the old
+      // subscription — which is exactly what the server sees too.
+      final fresh = MockClient();
+      when(() => fresh.subscribeResource('data://uptime'))
+          .thenAnswer((_) async {});
+      when(() => fresh.readResource('data://uptime'))
+          .thenAnswer((_) async => _result('{"uptime":42}'));
+
+      await subscriber.reattach(
+        client: fresh,
+        runtime: runtime,
+        ownerKey: 'srv-1',
+      );
+
+      verify(() => fresh.subscribeResource('data://uptime')).called(1);
+      verify(() => state.set('uptime', 42)).called(1);
+      verifyNever(() => runtime.registerResourceSubscription(any(), any()));
+      // The binding was never lost, so re-registering it would be the wrong
+      // repair — and would have hidden that the wire call was the gap.
+    });
+
+    test('an owner with nothing subscribed does not touch the wire', () async {
+      final fresh = MockClient();
+      await ResourceSubscriber().reattach(
+        client: fresh,
+        runtime: runtime,
+        ownerKey: 'srv-unknown',
+      );
+      verifyNever(() => fresh.subscribeResource(any()));
+    });
+
+    test('one failing resource does not stop the rest', () async {
+      when(() => client.subscribeResource(any())).thenAnswer((_) async {});
+      when(() => client.readResource(any()))
+          .thenAnswer((_) async => _result('{"a":1}'));
+
+      final subscriber = ResourceSubscriber();
+      for (final uri in <String>['data://a', 'data://b']) {
+        await subscriber.subscribe(
+          client: client,
+          runtime: runtime,
+          uri: uri,
+          binding: uri,
+          ownerKey: 'srv-1',
+        );
+      }
+
+      final fresh = MockClient();
+      when(() => fresh.subscribeResource('data://a'))
+          .thenThrow(StateError('refused'));
+      when(() => fresh.subscribeResource('data://b'))
+          .thenAnswer((_) async {});
+      when(() => fresh.readResource(any()))
+          .thenAnswer((_) async => _result('{"b":2}'));
+
+      await subscriber.reattach(
+        client: fresh,
+        runtime: runtime,
+        ownerKey: 'srv-1',
+      );
+
+      verify(() => fresh.subscribeResource('data://b')).called(1);
+      verify(() => state.set('b', 2)).called(1);
+    });
+  });
 }

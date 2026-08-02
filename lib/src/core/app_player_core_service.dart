@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File, Platform;
+import 'dart:io' show Platform;
+import 'dart:typed_data';
 import 'dart:ui' show Brightness;
 
 import 'composition_host_vendored.dart';
@@ -495,6 +496,7 @@ class AppPlayerCoreService {
   Future<void> initialize({
     required ServerStorage storage,
     required String bundleInstallRoot,
+    BundleInstallStore? bundleInstallStore,
     String workspaceId = 'appplayer',
     TenantSource? tenantSource,
     Logger? logger,
@@ -537,19 +539,36 @@ class AppPlayerCoreService {
     _toolDispatcher = ToolDispatcher(logger: _logger);
     _resourceSub = ResourceSubscriber(logger: _logger);
     _notifRouter = NotificationRouter(logger: _logger);
+    // A reconnect hands out a NEW client, and everything that lives on the
+    // client is gone with the old one: the notification handler and the
+    // server-side `resources/subscribe`. An app left open across a
+    // background round trip kept working for tool calls (those resolve the
+    // live client per call) and stopped streaming, with Subscribe doing
+    // nothing because the runtime binding was still registered. Re-attach
+    // both to the new client.
+    _conn.onClientAttached = _reattachOpenApps;
     _tenant = TenantResolver(source: tenantSource, logger: _logger);
     _bundleLoader = BundleLoaderAdapter(
       fetcher: bundleFetcher,
       logger: _logger,
       metrics: _metrics,
       installRoot: bundleInstallRoot,
+      installStore: bundleInstallStore,
     );
     _bundleResolver = const BundleResolver();
     _bundleAdapter = BundleApplicationAdapter(logger: _logger);
-    _bundleInstaller = BundleInstallerAdapter(
-      installRoot: bundleInstallRoot,
-      logger: _logger,
-    );
+    // A host that supplied storage has no directory to install into —
+    // `bundleInstallRoot` is then whatever placeholder it passed, and
+    // must not be used as one.
+    _bundleInstaller = bundleInstallStore != null
+        ? BundleInstallerAdapter.onStore(
+            store: bundleInstallStore,
+            logger: _logger,
+          )
+        : BundleInstallerAdapter(
+            installRoot: bundleInstallRoot,
+            logger: _logger,
+          );
     _metadataProvider = AppMetadataProvider(
       sink: appMetadataSink,
       logger: _logger,
@@ -1195,10 +1214,13 @@ class AppPlayerCoreService {
     final tools = bundle.tools?.tools ?? const [];
     final jsEntries = tools.where((t) => t.kind == ToolKind.js).toList();
     if (jsEntries.isEmpty) return null;
-    final dir = bundle.directory;
-    if (dir == null) {
+    // Read the entry scripts through the bundle's own file surface. A
+    // path would restrict JS tools to hosts that can resolve one, and
+    // the bundle already knows where its files are.
+    final bundleFiles = bundle.fileStore;
+    if (bundleFiles == null) {
       _logger.warn(
-        'JS tools declared but bundle has no directory — skip',
+        'JS tools declared but bundle carries no files — skip',
         {'bundleId': bundleId},
       );
       return null;
@@ -1233,15 +1255,21 @@ class AppPlayerCoreService {
       final entry = t.target['entry'];
       final fn = t.target['fn'];
       if (entry is! String || fn is! String) continue;
-      final sep = Platform.pathSeparator;
-      final entryPath = '$dir$sep${entry.replaceAll('/', sep)}';
       String code;
       try {
-        code = await File(entryPath).readAsString();
+        final bytes = await bundleFiles.read(entry);
+        if (bytes == null) {
+          _logger.warn(
+            'JS tool entry not found in bundle',
+            {'tool': t.name, 'entry': entry},
+          );
+          continue;
+        }
+        code = utf8.decode(bytes);
       } catch (e) {
         _logger.warn(
           'JS tool entry read failed',
-          {'tool': t.name, 'path': entryPath},
+          {'tool': t.name, 'entry': entry},
           e,
         );
         continue;
@@ -1346,6 +1374,17 @@ class AppPlayerCoreService {
   // the same bundle id (`if (!runtime.isInitialized)`), so without this a
   // reinstall/update kept rendering the OLD definition for the rest of the
   // session (fresh only after an app restart).
+  /// Install a bundle from `.mcpb` bytes (FR-INSTALL-001).
+  ///
+  /// For hosts that fetched the archive themselves and have no path to
+  /// hand — a browser shell installing a purchased bundle.
+  Future<InstalledAppBundle> installBundleFromBytes(Uint8List bytes) async {
+    _assertReady();
+    final installed = await _bundleInstaller.installBytes(bytes);
+    await _invalidateBundleCaches(installed.id);
+    return installed;
+  }
+
   Future<InstalledAppBundle> installBundleFromFile(String filePath) async {
     _assertReady();
     final installed = await _bundleInstaller.installFile(filePath);
@@ -1558,6 +1597,35 @@ class AppPlayerCoreService {
   ConnectionManager get connectionManagerForInternals {
     _assertReady();
     return _conn;
+  }
+
+  /// Re-binds an open app's per-connection state onto a freshly attached
+  /// client. Runs on first connect too, where it is a no-op: nothing has
+  /// subscribed yet and the open path registers its own handler.
+  void _reattachOpenApps(String serverId, Client client) {
+    // Every runtime fed by THIS server, not just the full-screen app: a
+    // composed dashboard tile watches the same device through its own summary
+    // runtime and would otherwise be the one surface still frozen after a
+    // resume.
+    for (final handle in <AppHandle>[
+      AppHandle.server(serverId),
+      DashboardOrchestrator.deviceSummaryRuntimeHandle(serverId),
+    ]) {
+      final runtime = _runtime.getRuntime(handle);
+      if (runtime == null) continue;
+      _notifRouter.register(
+        client: client,
+        runtime: runtime,
+        serverId: serverId,
+        onMcpLogMessage: _onMcpLogMessage,
+      );
+      unawaited(_resourceSub
+          .reattach(client: client, runtime: runtime, ownerKey: handle.key)
+          .catchError((Object e, StackTrace st) {
+        _logger.logError('reattach after reconnect failed', e, st,
+            {'serverId': serverId, 'handle': handle.toString()});
+      }));
+    }
   }
 
   @visibleForTesting

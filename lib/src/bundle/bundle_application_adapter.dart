@@ -37,13 +37,18 @@ class BundleApplicationAdapter {
     _assertRuntimeCompatibility(bundle.manifest);
 
     final bundleId = bundle.manifest.id;
-    if (bundle.directory == null) {
+    // What adapting needs is readable files, not a directory. A bundle
+    // installed into host-provided storage has the former and never the
+    // latter; requiring a path here is what kept such a bundle from
+    // opening at all.
+    if (bundle.fileStore == null) {
       throw BundleAdaptException(
         bundleId: bundleId,
         reason: BundleAdaptReason.unsupportedEntryPoint,
         message:
-            'Bundle has no filesystem root — inline / remote refs must '
-            'be materialised to a directory before adapting',
+            'Bundle carries no files — inline / remote refs must be '
+            'materialised into a directory or a bundle store before '
+            'adapting',
       );
     }
 
@@ -53,7 +58,8 @@ class BundleApplicationAdapter {
         bundleId: bundleId,
         reason: BundleAdaptReason.unsupportedEntryPoint,
         message:
-            'ui/app.json not found in installed bundle ${bundle.directory} '
+            'ui/app.json not found in installed bundle '
+            '${bundle.directory ?? bundleId} '
             '— the bundle likely predates the filesystem-snapshot layout. '
             'Delete the app entry in the launcher and reinstall from '
             'the .mcpb. Available ui/* files: '

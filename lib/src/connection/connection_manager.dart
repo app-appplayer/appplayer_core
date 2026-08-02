@@ -71,6 +71,18 @@ class ConnectionManager extends ChangeNotifier {
   /// no re-grant; connect/reconnect stay byte-for-byte as before.
   ServerReGrant? tokenReGrant;
 
+  /// Called after a server's [Client] is replaced by a NEW one — the first
+  /// connect and every reconnect alike.
+  ///
+  /// State that lives on the CLIENT does not survive the swap: notification
+  /// handlers and `resources/subscribe` are per-connection, so an open app
+  /// that was streaming goes silent after a background round trip while its
+  /// tool calls keep working (those resolve the live client per call). The
+  /// screen looked healthy and only the stream was dead, and pressing
+  /// Subscribe again did nothing because the runtime had already registered
+  /// its binding. Whoever owns that state re-attaches here.
+  void Function(String serverId, Client client)? onClientAttached;
+
   Map<String, ConnectionInfo> get connections =>
       Map.unmodifiable(_connections);
 
@@ -131,6 +143,17 @@ class ConnectionManager extends ChangeNotifier {
         (reason) => _handleTransportDrop(server.id, reason),
       );
       notifyListeners();
+      // After the entry is live, so a re-attach can resolve the connection it
+      // is re-attaching to.
+      final attached = onClientAttached;
+      if (attached != null) {
+        try {
+          attached(server.id, client);
+        } catch (e, st) {
+          _logger.logError(
+              'onClientAttached hook threw', e, st, {'serverId': server.id});
+        }
+      }
 
       _logger.info('Connected', {'serverId': server.id});
       return ConnectionResult.success(info);

@@ -56,6 +56,86 @@ void main() {
     if (await tempRoot.exists()) await tempRoot.delete(recursive: true);
   });
 
+  group('BundleApplicationAdapter — bundles with no filesystem', () {
+    /// Same bundle shape, held in a store instead of a directory. This is
+    /// what a host without a filesystem installs into.
+    Future<McpBundle> storeBundle({
+      required Map<String, dynamic> app,
+      Map<String, Map<String, dynamic>> pages = const {},
+    }) async {
+      final files = MemoryBundleFileStore.ofText({
+        'manifest.json': jsonEncode({
+          'schemaVersion': '1.0.0',
+          'manifest': <String, dynamic>{
+            'id': 'demo',
+            'name': 'Demo',
+            'version': '1.0.0',
+            'schemaVersion': '1.0.0',
+            'type': 'application',
+            'entryPoint': 'ui.main',
+          },
+        }),
+        'ui/app.json': jsonEncode(app),
+        for (final e in pages.entries)
+          'ui/pages/${e.key}.json': jsonEncode(e.value),
+      });
+      return McpBundleLoader.loadStore(files);
+    }
+
+    test('adapts a store-backed bundle with no directory', () async {
+      final bundle = await storeBundle(
+        app: <String, dynamic>{
+          'type': 'application',
+          'title': 'Demo',
+          'initialRoute': '/',
+          'routes': {'/': 'ui://pages/main'},
+        },
+        pages: {
+          'main': {
+            'type': 'page',
+            'content': {'type': 'text', 'content': 'hi'},
+          },
+        },
+      );
+      // The precondition that used to reject this bundle outright.
+      expect(bundle.directory, isNull);
+
+      final def = await BundleApplicationAdapter().adapt(
+        bundle,
+        const BundleEntryPoint(BundleEntryType.ui, 'main'),
+        uriResolver: BundleUriResolver(),
+      );
+      expect(def.sourceKind, ApplicationSourceKind.localBundle);
+      expect(def.appId, 'demo');
+      expect(def.json['title'], 'Demo');
+    });
+
+    test('a bundle with neither directory nor store is still refused',
+        () async {
+      final bundle = McpBundle.fromJson({
+        'schemaVersion': '1.0.0',
+        'manifest': <String, dynamic>{
+          'id': 'demo',
+          'name': 'Demo',
+          'version': '1.0.0',
+          'schemaVersion': '1.0.0',
+          'type': 'application',
+          'entryPoint': 'ui.main',
+        },
+      });
+      expect(bundle.fileStore, isNull);
+      await expectLater(
+        BundleApplicationAdapter().adapt(
+          bundle,
+          const BundleEntryPoint(BundleEntryType.ui, 'main'),
+          uriResolver: BundleUriResolver(),
+        ),
+        throwsA(predicate(
+            (e) => _adapt(e, BundleAdaptReason.unsupportedEntryPoint))),
+      );
+    });
+  });
+
   group('BundleApplicationAdapter (MOD-BUNDLE-004)', () {
     test('TC-BUNDLE-ADAPT-001: ui/app.json pass-through', () async {
       final bundle = await _writeBundle(tempRoot,

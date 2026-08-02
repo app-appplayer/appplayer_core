@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_mcp_ui_core/flutter_mcp_ui_core.dart'
     show MCPUIDSLVersion;
 import 'package:mcp_bundle/mcp_bundle.dart' as mcpb;
@@ -10,12 +12,31 @@ import 'installed_app_bundle.dart';
 /// install / uninstall / list API without leaking `mcp_bundle` types
 /// (MOD-BUNDLE-005, FR-INSTALL-001~008).
 class BundleInstallerAdapter {
+  /// Install into a directory on the local filesystem.
   BundleInstallerAdapter({
-    required this.installRoot,
+    required String installRoot,
     Logger? logger,
-  }) : _logger = logger ?? NoopLogger();
+  })  : installRoot = installRoot,
+        store = mcpb.FileBundleInstallStore(installRoot),
+        _logger = logger ?? NoopLogger();
 
-  final String installRoot;
+
+  /// Install into host-provided storage.
+  ///
+  /// The form a host with no filesystem uses — the browser shell passes
+  /// the account's storage here and installing works unchanged.
+  BundleInstallerAdapter.onStore({
+    required this.store,
+    Logger? logger,
+  })  : installRoot = null,
+        _logger = logger ?? NoopLogger();
+
+  /// Install directory, when this adapter was built from one.
+  final String? installRoot;
+
+  /// Where installed bundles live.
+  final mcpb.BundleInstallStore store;
+
   final Logger _logger;
 
   static final mcpb.RuntimeDescriptor _runtime = mcpb.RuntimeDescriptor(
@@ -25,11 +46,28 @@ class BundleInstallerAdapter {
 
   static const mcpb.TrustStore _trustStore = mcpb.EmptyTrustStore();
 
+  /// Install from `.mcpb` bytes already in hand.
+  ///
+  /// The entry point a host without a filesystem uses: it downloaded the
+  /// archive, so it has bytes and never a path. [installFile] is the
+  /// same call with a read in front of it.
+  Future<InstalledAppBundle> installBytes(Uint8List bytes) async {
+    return _run('bytes', () async {
+      final installed = await mcpb.McpBundleInstaller.installBytes(
+        bytes,
+        store: store,
+        runtime: _runtime,
+        trustStore: _trustStore,
+      );
+      return _toCore(installed);
+    });
+  }
+
   Future<InstalledAppBundle> installFile(String filePath) async {
     return _run('file', () async {
       final installed = await mcpb.McpBundleInstaller.installFile(
         filePath,
-        installRoot: installRoot,
+        store: store,
         runtime: _runtime,
         trustStore: _trustStore,
       );
@@ -41,7 +79,7 @@ class BundleInstallerAdapter {
     return _run('directory', () async {
       final installed = await mcpb.McpBundleInstaller.installDirectory(
         mbdPath,
-        installRoot: installRoot,
+        store: store,
         runtime: _runtime,
         trustStore: _trustStore,
       );
@@ -53,7 +91,7 @@ class BundleInstallerAdapter {
     return _run('url', () async {
       final installed = await mcpb.McpBundleInstaller.installUrl(
         url,
-        installRoot: installRoot,
+        store: store,
         runtime: _runtime,
         trustStore: _trustStore,
       );
@@ -63,11 +101,11 @@ class BundleInstallerAdapter {
 
   Future<void> uninstall(String bundleId) async {
     _logger.info('bundle.uninstall', {'bundleId': bundleId});
-    await mcpb.McpBundleInstaller.uninstall(installRoot, bundleId);
+    await mcpb.McpBundleInstaller.uninstallFrom(store, bundleId);
   }
 
   Future<List<InstalledAppBundle>> list() async {
-    final installed = await mcpb.McpBundleInstaller.list(installRoot);
+    final installed = await mcpb.McpBundleInstaller.listFrom(store);
     _logger.debug('bundle.list', {'count': installed.length});
     return installed.map(_toCore).toList(growable: false);
   }
@@ -77,7 +115,7 @@ class BundleInstallerAdapter {
     Future<InstalledAppBundle> Function() body,
   ) async {
     _logger.debug('bundle.install.start',
-        {'source': source, 'installRoot': installRoot});
+        {'source': source, 'destination': installRoot ?? store.runtimeType});
     try {
       final result = await body();
       _logger.info('bundle.install.success', {

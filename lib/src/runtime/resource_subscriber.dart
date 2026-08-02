@@ -114,6 +114,50 @@ class ResourceSubscriber {
     }
   }
 
+  /// Re-issues every subscription recorded for [ownerKey] on a NEW client.
+  ///
+  /// A subscription belongs to the CONNECTION. After a background round trip
+  /// the connection is torn down and rebuilt, and the server has no memory of
+  /// what the previous link had subscribed — the stream simply stops. The
+  /// runtime bindings, on the other hand, live in the runtime and survive, so
+  /// nothing on screen looks wrong and pressing Subscribe again is a no-op
+  /// from the runtime's point of view. Only the wire call has to be redone.
+  ///
+  /// Bindings are therefore NOT re-registered here; the initial read is, so
+  /// the first value after a resume is current rather than whatever was on
+  /// screen when the app went away.
+  Future<void> reattach({
+    required Client client,
+    required MCPUIRuntime runtime,
+    required String ownerKey,
+  }) async {
+    final uris = _active[ownerKey];
+    if (uris == null || uris.isEmpty) return;
+    for (final uri in List<String>.from(uris)) {
+      try {
+        await SharedResourceSubscriptions.subscribe(client, uri);
+      } catch (e, st) {
+        _logger.logError('resubscribe after reconnect failed', e, st,
+            {'uri': uri, 'ownerKey': ownerKey});
+        continue;
+      }
+      try {
+        final resource = await client.readResource(uri);
+        if (resource.contents.isEmpty) continue;
+        final text = resource.contents.first.text;
+        if (text == null) continue;
+        final decoded = jsonDecode(text);
+        if (decoded is Map<String, dynamic>) {
+          decoded.forEach(runtime.stateManager.set);
+        }
+      } catch (e) {
+        _logger.warn('resubscribe initial read failed', {'uri': uri}, e);
+      }
+    }
+    _logger.info('resubscribed after reconnect',
+        {'ownerKey': ownerKey, 'count': uris.length});
+  }
+
   /// Snapshot of active subscription URIs per ownerKey (test helper).
   Map<String, Set<String>> get activeSubscriptions =>
       <String, Set<String>>{for (final e in _active.entries) e.key: {...e.value}};

@@ -23,15 +23,21 @@ class BundleLoaderAdapter {
     Logger? logger,
     MetricsPort? metrics,
     String? installRoot,
+    BundleInstallStore? installStore,
   })  : _fetcher = fetcher,
         _logger = logger ?? NoopLogger(),
         _metrics = metrics ?? const NoopMetricsPort(),
-        _installRoot = installRoot;
+        _installRoot = installRoot,
+        _installStore = installStore;
 
   final BundleFetcher? _fetcher;
   final Logger _logger;
   final MetricsPort _metrics;
   final String? _installRoot;
+
+  /// Where installed bundles live, when the host provided storage rather
+  /// than a directory. Wins over [_installRoot] when both are set.
+  final BundleInstallStore? _installStore;
 
   /// Schema versions accepted by this release. Kept narrow; `mcp_bundle`
   /// validates internal structure while this adapter enforces the payload
@@ -127,25 +133,36 @@ class BundleLoaderAdapter {
         }
 
       case BundleInstalledRef(:final bundleId):
-        // FR-BUNDLE-009 — delegate to mcp_bundle so McpBundle.directory is
-        // populated; BundleApplicationAdapter reads ui/app.json from there.
+        // FR-BUNDLE-009 — delegate to mcp_bundle so the bundle keeps its
+        // backing files; BundleApplicationAdapter reads ui/app.json from
+        // them. Store first: a host that provided one has no directory.
+        final store = _installStore;
         final root = _installRoot;
-        if (root == null) {
+        if (store == null && root == null) {
           throw BundleLoadException(
             bundleId: bundleId,
             reason: BundleLoadReason.unknown,
-            message: 'BundleInstalledRef requires bundleInstallRoot to be '
-                'provided via AppPlayerCoreService.initialize',
+            message: 'BundleInstalledRef requires bundleInstallRoot or '
+                'bundleInstallStore to be provided via '
+                'AppPlayerCoreService.initialize',
           );
         }
         final McpBundle bundle;
         try {
-          bundle = await McpBundleLoader.loadInstalled(root, bundleId);
+          if (store != null) {
+            final files = await store.openInstalled(bundleId);
+            if (files == null) {
+              throw BundleNotFoundException(Uri.parse('bundle:$bundleId'));
+            }
+            bundle = await McpBundleLoader.loadStore(files);
+          } else {
+            bundle = await McpBundleLoader.loadInstalled(root!, bundleId);
+          }
         } on BundleNotFoundException catch (e) {
           throw BundleLoadException(
             bundleId: bundleId,
             reason: BundleLoadReason.notFound,
-            message: 'Installed bundle not found at $root/$bundleId',
+            message: 'Installed bundle not found: $bundleId',
             cause: e,
           );
         } catch (e) {
