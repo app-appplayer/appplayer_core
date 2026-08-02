@@ -1,3 +1,20 @@
+## [0.1.19] - 2026-08-03 — mcp_ui 1.4 cut
+
+Floors `flutter_mcp_ui_core ^0.4.3 → ^0.5.0` and
+`flutter_mcp_ui_runtime ^0.5.3 → ^0.6.0`.
+
+Both are minor because the schema narrows: `AssetRef` slots reject a bare
+string carrying no scheme, the icon slots take the new `IconRef`, and thirteen
+string properties that documented their values in prose now declare `enum`. A
+caret bound on `^0.5.x` cannot reach 0.6.0, so this floor is what lets any
+AppPlayer tier see the new runtime at all.
+
+What arrives with it: one asset resolution path for every `AssetRef` slot
+(`image` / `avatar` / `icon` / `box.decoration` converge, and `bundle://` and
+`client://` are resolvable for the first time), `navigation.openUrl`, and 23
+new widgets. No API in this package changed — the surface is identical and the
+bump is the dependency cut.
+
 ## 0.1.18 - 2026-08-02 - Install into host-provided storage; streams survive a background resume
 
 ### Added
