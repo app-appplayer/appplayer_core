@@ -25,6 +25,56 @@ void main() {
       loader = ApplicationLoader();
     });
 
+    test(
+        'TC-APPLOAD-010: pageLoader applies the transform to every page it '
+        'reads', () async {
+      // mcp_ui_dsl §6.12.7 — a host applies one resolution placement to every
+      // document. The server-open path passes the served bundle\'s
+      // `bundle://` resolver here; without it the entry document resolved and
+      // pages loaded afterwards did not, so the first frame drew and the
+      // second showed nothing.
+      when(() => client.readResource('ui://pages/home')).thenAnswer(
+        (_) async => _readResult('{"type":"page","src":"bundle://logo.png"}'),
+      );
+      final load = loader.pageLoaderFor(
+        client,
+        transform: (page) => <String, dynamic>{
+          ...page,
+          'src': 'data:image/png;base64,AAAA',
+        },
+      );
+
+      final page = await load('ui://pages/home');
+      expect(page['src'], 'data:image/png;base64,AAAA');
+      expect(page['type'], 'page', reason: 'the rest of the page is untouched');
+    });
+
+    test(
+        'TC-APPLOAD-011: the cached entry page gets the transform too',
+        () async {
+      // The server-open path feeds the already-read entry document back
+      // through a cache so the first frame never re-reads a possibly dead
+      // link. That cached copy is raw off the wire, so it needs the same
+      // treatment as the live path — otherwise the one page guaranteed to
+      // render is the one page that does not resolve.
+      final cached = <String, dynamic>{
+        'type': 'page',
+        'src': 'bundle://logo.png',
+      };
+      final load = loader.cachingPageLoaderFor(
+        client,
+        {'ui://app': cached},
+        transform: (page) => <String, dynamic>{
+          ...page,
+          'src': 'data:image/png;base64,AAAA',
+        },
+      );
+
+      final page = await load('ui://app');
+      expect(page['src'], 'data:image/png;base64,AAAA');
+      verifyNever(() => client.readResource('ui://app'));
+    });
+
     test('TC-APPLOAD-001: ui://app selected', () async {
       when(() => client.listResources())
           .thenAnswer((_) async => [_res('ui://app', name: 'App')]);

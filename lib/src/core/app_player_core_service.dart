@@ -911,59 +911,14 @@ class AppPlayerCoreService {
         _metadataCache[handle] = metadata;
       }
 
-      final loaded = await _appLoader.load(client, resources: resources);
-      // Run every server app through AppPlayer's standard app-execution
-      // structure: promote a bare `page` to a single-route application so the
-      // runtime mounts routing (route -> MCPPageWidget frames the page and
-      // lifts its `title` into an AppBar) and the dashboard/navigation slots
-      // come live. A server that already serves an application passes through
-      // unchanged. pickAppUri returns the same uri load() just read.
-      final appUri = _appLoader.pickAppUri(resources);
-      final definition = appUri == null
-          ? loaded
-          : _appLoader.wrapAsApplication(loaded, appUri: appUri);
-      final wrapped = !identical(definition, loaded);
-      _logger.debug('server.open.first', {
-        'serverId': serverId,
-        'metadata': metadata != null,
-        'infoListed': infoListed,
-        'resources': resources.length,
-        'defKeys': definition.keys.take(8).join(','),
-        'wrapped': wrapped,
-        'hasTheme': definition['theme'] != null ||
-            (definition['runtime'] as Map?)?['services']?['theme'] != null,
-      });
-      // When we promoted the page, serve its already-parsed content back to
-      // the route from memory instead of re-reading it over the (possibly
-      // dead) link — so the app's first frame, and its exit affordance,
-      // always render (see cachingPageLoaderFor).
-      await runtime.initialize(
-        definition,
-        pageLoader: wrapped && appUri != null
-            ? _appLoader.cachingPageLoaderFor(client, {appUri: loaded})
-            : _appLoader.pageLoaderFor(client),
-        entry: entry,
-        identity: identity,
-        launchRoute: launchRoute,
-      );
-      _reportLaunchRoute(runtime, entry?.route ?? launchRoute);
-      runtime.setTrustLevel(trustLevel);
-      _applyStreamSources(runtime);
-      _applyDefinitionResolver(runtime);
-      _notifRouter.register(
-        client: client,
-        runtime: runtime,
-        serverId: serverId,
-        onMcpLogMessage: _onMcpLogMessage,
-      );
-
-      // MCP Serving 1.0 — if the server exposes
-      // the bundle document, reconstruct the McpBundle and activate its
-      // declarative sections (knowledge / settings / behavior / tool
-      // declarations) so they come live, identical to a local bundle. Tool
-      // execution stays remote (`tools/call`) and the UI still loads via
-      // `ui://app` above. Absent the document, an existing ui://app-only
-      // server is unaffected. Done once on the first open, never on reuse.
+      // MCP Serving 1.0 §"Rules" 2 (Equivalence) — a served bundle must behave
+      // identically to the same bundle run locally. The local path resolves
+      // `bundle://` against the bundle's own assets before the runtime ever
+      // sees the definition (mcp_ui_dsl §6.12.7, placement 1); the served path
+      // has to do the same, or the identical document renders in one and
+      // shows nothing in the other. So the document is read *before* the UI
+      // rather than after it — the resource list above already tells us
+      // whether it is there, at no extra round-trip.
       if (resources.any((r) => r.uri == _bundleDocumentUri)) {
         try {
           final res = await client.readResource(_bundleDocumentUri);
@@ -982,6 +937,80 @@ class AppPlayerCoreService {
           );
         }
       }
+      // Resolver over the served bundle's own assets. Absent a bundle
+      // document there is nothing to resolve against, and `bundle://` in that
+      // document is an unresolvable asset (§6.12.4) — not an error.
+      final servedUriResolver = servedBundle == null
+          ? null
+          : BundleUriResolver(assets: servedBundle.assets, logger: _logger);
+
+      final loaded = await _appLoader.load(client, resources: resources);
+      // Run every server app through AppPlayer's standard app-execution
+      // structure: promote a bare `page` to a single-route application so the
+      // runtime mounts routing (route -> MCPPageWidget frames the page and
+      // lifts its `title` into an AppBar) and the dashboard/navigation slots
+      // come live. A server that already serves an application passes through
+      // unchanged. pickAppUri returns the same uri load() just read.
+      final appUri = _appLoader.pickAppUri(resources);
+      final rawDefinition = appUri == null
+          ? loaded
+          : _appLoader.wrapAsApplication(loaded, appUri: appUri);
+      final definition = servedUriResolver == null
+          ? rawDefinition
+          : servedUriResolver.rewriteDefinition(rawDefinition)
+              as Map<String, dynamic>;
+      final wrapped = !identical(definition, loaded);
+      _logger.debug('server.open.first', {
+        'serverId': serverId,
+        'metadata': metadata != null,
+        'infoListed': infoListed,
+        'resources': resources.length,
+        'defKeys': definition.keys.take(8).join(','),
+        'wrapped': wrapped,
+        'hasTheme': definition['theme'] != null ||
+            (definition['runtime'] as Map?)?['services']?['theme'] != null,
+      });
+      // When we promoted the page, serve its already-parsed content back to
+      // the route from memory instead of re-reading it over the (possibly
+      // dead) link — so the app's first frame, and its exit affordance,
+      // always render (see cachingPageLoaderFor).
+      await runtime.initialize(
+        definition,
+        pageLoader: wrapped && appUri != null
+            ? _appLoader.cachingPageLoaderFor(
+                client,
+                {appUri: loaded},
+                transform: servedUriResolver == null
+                    ? null
+                    : (page) => servedUriResolver.rewriteDefinition(page)
+                        as Map<String, dynamic>,
+              )
+            : _appLoader.pageLoaderFor(
+                client,
+                transform: servedUriResolver == null
+                    ? null
+                    : (page) => servedUriResolver.rewriteDefinition(page)
+                        as Map<String, dynamic>,
+              ),
+        entry: entry,
+        identity: identity,
+        launchRoute: launchRoute,
+      );
+      _reportLaunchRoute(runtime, entry?.route ?? launchRoute);
+      runtime.setTrustLevel(trustLevel);
+      _applyStreamSources(runtime);
+      _applyDefinitionResolver(runtime);
+      _notifRouter.register(
+        client: client,
+        runtime: runtime,
+        serverId: serverId,
+        onMcpLogMessage: _onMcpLogMessage,
+      );
+
+      // The document was read before the UI (above) so its assets could
+      // resolve. Its declarative sections (knowledge / settings / behavior /
+      // tool declarations) come live here, identical to a local bundle. Tool
+      // execution stays remote (`tools/call`).
       if (servedBundle != null) {
         servedBundleId = servedBundle.manifest.id;
         jsState = await _activateBundleSections(servedBundle, servedBundleId);

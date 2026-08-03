@@ -121,6 +121,73 @@ void main() {
       expect((served['manifest'] as Map)['id'], 'srv.bundle');
     });
 
+    test(
+        'IT-007a: MCP Serving 1.0 — a served bundle\'s `bundle://` assets resolve',
+        () async {
+      // Equivalence (mcp_serving §Rules 2): the local path resolves
+      // `bundle://` against the bundle\'s own assets before the runtime sees
+      // the definition, so the served path must too. Without it the same
+      // document renders locally and shows nothing over a connection —
+      // mcp_ui_dsl §6.12.7 forbids the placement differing by arrival path.
+      const pixel =
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      final doc = <String, dynamic>{
+        'schemaVersion': '1.0.0',
+        'manifest': {'id': 'srv.assets', 'name': 'Served', 'version': '1.0.0'},
+        'assets': {
+          'assets': [
+            {
+              'path': 'images/logo.png',
+              'mimeType': 'image/png',
+              'encoding': 'base64',
+              'content': pixel,
+            },
+          ],
+        },
+      };
+      // The reference sits in the application definition itself, which is the
+      // document the runtime receives directly — the page loader carries the
+      // same transform and is covered by the loader's own unit test.
+      final app = <String, dynamic>{
+        'type': 'application',
+        'title': 'Served',
+        'routes': {'/': 'ui://pages/home'},
+        'splash': {'image': 'bundle://images/logo.png'},
+      };
+      final page = <String, dynamic>{
+        'type': 'page',
+        'content': {'type': 'text', 'content': 'home'},
+      };
+      server.withResources([
+        Resource(
+          uri: 'ui://app',
+          name: 'App',
+          description: '',
+          mimeType: 'application/json',
+        ),
+        Resource(
+          uri: 'bundle://manifest.json',
+          name: 'Bundle',
+          description: '',
+          mimeType: 'application/json',
+        ),
+      ]);
+      server.withResourceContent('ui://app', app);
+      server.withResourceContent('ui://pages/home', page);
+      server.withResourceContent('bundle://manifest.json', doc);
+
+      final session = await core.openAppFromServer('s1');
+      final runtime = core.runtimeManagerForInternals
+          .getOrCreateRuntime(session.handle);
+      final definition = runtime.getUIDefinition()!;
+      final src = ((definition['splash'] as Map)['image'] as String);
+
+      expect(src.startsWith('data:image/png;base64,'), isTrue,
+          reason: 'the served bundle\'s asset must be resolved before the '
+              'runtime sees it, not passed through as `bundle://` — got: $src');
+      expect(src, contains(pixel));
+    });
+
     test('IT-008: MCP Serving 1.0 — server without a bundle document is unaffected',
         () async {
       // The default setUp server serves only ui://app (an existing server).

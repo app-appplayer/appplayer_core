@@ -117,16 +117,27 @@ class ApplicationLoader {
   }
 
   /// FR-APP-006
-  PageLoader pageLoaderFor(Client client) {
+  ///
+  /// [transform] is applied to every page before it reaches the runtime. The
+  /// server-open path passes the served bundle's `bundle://` resolver so a
+  /// page loaded later resolves its assets exactly as the entry document did
+  /// — mcp_ui_dsl §6.12.7 requires one placement per host, not one per
+  /// document, and a page that resolved on the first frame and not on the
+  /// second would be the worst version of that.
+  PageLoader pageLoaderFor(
+    Client client, {
+    Map<String, dynamic> Function(Map<String, dynamic>)? transform,
+  }) {
     return (String uri) async {
       _logger.debug('Loading page', {'uri': uri});
       final page = await client.readResource(uri);
       if (page.contents.isEmpty) return <String, dynamic>{};
       final text = page.contents.first.text ?? '{}';
       final decoded = jsonDecode(text);
-      return decoded is Map<String, dynamic>
+      final map = decoded is Map<String, dynamic>
           ? decoded
           : <String, dynamic>{};
+      return transform == null ? map : transform(map);
     };
   }
 
@@ -143,14 +154,17 @@ class ApplicationLoader {
   /// even if the connection dropped right after the initial load.
   PageLoader cachingPageLoaderFor(
     Client client,
-    Map<String, Map<String, dynamic>> cache,
-  ) {
-    final base = pageLoaderFor(client);
+    Map<String, Map<String, dynamic>> cache, {
+    Map<String, dynamic> Function(Map<String, dynamic>)? transform,
+  }) {
+    final base = pageLoaderFor(client, transform: transform);
     return (String uri) async {
       final cached = cache[uri];
       if (cached != null) {
         _logger.debug('Loading page from cache', {'uri': uri});
-        return cached;
+        // The cache holds the entry page as it came off the wire, so it needs
+        // the same transform the live path gets.
+        return transform == null ? cached : transform(cached);
       }
       return base(uri);
     };
