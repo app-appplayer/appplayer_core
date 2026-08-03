@@ -172,28 +172,17 @@ class AppSessionImpl implements AppSession {
     );
   }
 
-  Future<dynamic> _onToolCall(
-      String tool, Map<String, dynamic> params) async {
-    final client = _client;
-    if (client == null) {
-      // Local bundle (no server client): still route host-registered in-process
-      // capability tools (registerCapabilityTools, e.g. `provision.*`) directly
-      // through the dispatcher — they need no external MCP client.
-      if (_tools.inProcessToolNames.contains(tool)) {
-        return _tools.callInProcess(tool, params);
-      }
-      _logger.warn('session.tool.no_client', {
-        'handle': handle.toString(),
-        'tool': tool,
-      });
-      return null;
-    }
-    return _tools.call(
-      client: client,
-      tool: tool,
-      params: params,
-    );
-  }
+  // Local bundle (no server client): still route host-registered in-process
+  // capability tools (registerCapabilityTools, e.g. `provision.*`) directly
+  // through the dispatcher — they need no external MCP client.
+  Future<dynamic> _onToolCall(String tool, Map<String, dynamic> params) =>
+      _tools.routerFor(
+        _client,
+        onNoClient: (t) => _logger.warn('session.tool.no_client', {
+          'handle': handle.toString(),
+          'tool': t,
+        }),
+      )(tool, params);
 
   Future<void> _onResourceSubscribe(String uri, String binding) async {
     final client = _client;

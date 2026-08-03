@@ -68,6 +68,27 @@ class ToolDispatcher {
     }
   }
 
+  /// The routing a host hands the runtime as `onToolCall`: an in-process tool
+  /// when there is no client, the full dispatch when there is.
+  ///
+  /// Shared because it is needed at two moments — before `initialize`, so a
+  /// definition-level `onInit` tool call has somewhere to land (MCP UI DSL
+  /// §1.5.2 fires that hook ahead of the first render), and again at
+  /// `buildUI` for everything after. Two copies of it would drift.
+  Future<dynamic> Function(String, Map<String, dynamic>) routerFor(
+    Client? client, {
+    void Function(String tool)? onNoClient,
+  }) {
+    return (String tool, Map<String, dynamic> params) async {
+      if (client == null) {
+        if (_inProcess.containsKey(tool)) return callInProcess(tool, params);
+        onNoClient?.call(tool);
+        return null;
+      }
+      return call(client: client, tool: tool, params: params);
+    };
+  }
+
   Future<dynamic> call({
     required Client client,
     required String tool,

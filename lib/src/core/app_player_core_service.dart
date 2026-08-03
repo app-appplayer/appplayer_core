@@ -1000,6 +1000,11 @@ class AppPlayerCoreService {
       // always render (see cachingPageLoaderFor).
       await runtime.initialize(
         definition,
+        // A definition-level `onInit` fires inside `initialize` (DSL §1.5.2),
+        // before `buildUI` has anywhere to register — so an app that loads its
+        // first data there reached nothing at all. Same routing the session
+        // installs later.
+        onToolCall: _toolDispatcher.routerFor(client),
         pageLoader: wrapped && appUri != null
             ? _appLoader.cachingPageLoaderFor(
                 client,
@@ -1166,6 +1171,10 @@ class AppPlayerCoreService {
     if (!runtime.isInitialized) {
       await runtime.initialize(
         definition.json,
+        // See the served path above: `onInit` runs before `buildUI`. A local
+        // bundle has no client, so this resolves in-process tools only —
+        // which is exactly what the session's router does for it too.
+        onToolCall: _toolDispatcher.routerFor(null),
         pageLoader: definition.pageLoader,
         entry: launchEntry,
         identity: identity,
