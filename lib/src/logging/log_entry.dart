@@ -5,7 +5,14 @@ import 'logger.dart';
 /// Origin of a [LogEntry] — distinguishes AppPlayer's own diagnostic
 /// trace from MCP server-emitted `notifications/message` payloads so
 /// the field-report viewer can separate them.
-enum LogSource { core, mcp }
+/// Where a record came from.
+///
+/// `runtime` is the UI DSL runtime. Its diagnostics used to go to
+/// `dart:developer` and stop there: whoever had DevTools open saw them and
+/// nobody else. Some of them are addressed to the person who wrote the
+/// document — "this theme role was declared and dropped" — and that person is
+/// looking at the app, not at a debugger.
+enum LogSource { core, mcp, runtime }
 
 /// Single record stored in [LogBuffer]. Both AppPlayer Core diagnostics
 /// (via `BufferLogger`) and MCP server logs (via `notifications/message`)
@@ -44,6 +51,29 @@ class LogEntry {
       level: _coreToMcp(level),
       message: message,
       context: context,
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+
+  /// A record from the UI DSL runtime (`MCPLogger`).
+  ///
+  /// The runtime's four levels map onto the same MCP levels the other two
+  /// sources use, so one viewer shows all three without the reader having to
+  /// know which subsystem spoke.
+  factory LogEntry.fromRuntime({
+    DateTime? timestamp,
+    required String level,
+    required String logger,
+    required String message,
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    return LogEntry(
+      timestamp: timestamp,
+      source: LogSource.runtime,
+      level: _runtimeToMcp(level),
+      message: '[$logger] $message',
       error: error,
       stackTrace: stackTrace,
     );
@@ -97,6 +127,20 @@ class LogEntry {
         return McpLogLevel.warning;
       case LogLevel.error:
         return McpLogLevel.error;
+    }
+  }
+
+  /// `MCPLogger` names its levels `DEBUG` / `INFO` / `WARN` / `ERROR`.
+  static McpLogLevel _runtimeToMcp(String level) {
+    switch (level.toUpperCase()) {
+      case 'DEBUG':
+        return McpLogLevel.debug;
+      case 'WARN':
+        return McpLogLevel.warning;
+      case 'ERROR':
+        return McpLogLevel.error;
+      default:
+        return McpLogLevel.info;
     }
   }
 

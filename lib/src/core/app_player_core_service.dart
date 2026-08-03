@@ -487,13 +487,28 @@ class AppPlayerCoreService {
   /// `{level, logger?, data}` shape.
   McpLogMessageHandler? _onMcpLogMessage;
 
+  /// Whether this service installed the runtime log bridge, so `dispose`
+  /// removes only its own and never a host's or another instance's.
+  bool _runtimeLogInstalled = false;
+
   /// FR-CORE-001
   ///
   /// [workspaceId] — the workspace identifier passed to brain_kernel's
   /// `FlowBrainWiring`. Hosts pick their own value (for example
   /// `appplayer.standard` / `appplayer.pro` / etc.). Defaults to
   /// `appplayer` when unspecified.
+  /// Receives the UI DSL runtime's own diagnostics.
+  ///
+  /// The runtime talks to `dart:developer`, which reaches DevTools and stops.
+  /// Some of what it says is addressed to whoever wrote the document — a
+  /// theme role declared and dropped, an asset reference nothing could
+  /// resolve — and that person is looking at the app. A host that passes this
+  /// gets those records and can put them where its own logs go.
+  ///
+  /// `stdout` is not an alternative: on a stdio MCP connection it carries the
+  /// protocol.
   Future<void> initialize({
+    RuntimeLogHandler? onRuntimeLog,
     required ServerStorage storage,
     required String bundleInstallRoot,
     BundleInstallStore? bundleInstallStore,
@@ -575,6 +590,15 @@ class AppPlayerCoreService {
     );
     _hostBrightness = hostBrightness;
     _onMcpLogMessage = onMcpLogMessage;
+
+    // Bridge the UI DSL runtime's diagnostics to whoever asked for them.
+    // Installed once, at initialize: the runtime logger is static, and a
+    // handler wired later would miss everything a document said while it was
+    // being loaded — which is when most of what it has to say happens.
+    if (onRuntimeLog != null) {
+      MCPLogger.onRecord = onRuntimeLog;
+      _runtimeLogInstalled = true;
+    }
     _settingsStore = settingsStore ?? InMemorySettingsStore();
 
     _dashboard = DashboardOrchestrator(
@@ -1678,6 +1702,12 @@ class AppPlayerCoreService {
   /// FR-CORE-006
   Future<void> dispose() async {
     if (!_initialized) return;
+    if (_runtimeLogInstalled) {
+      // Only this service's own bridge is removed: the hook is static, and
+      // tearing down a handler another instance installed would silence it.
+      MCPLogger.onRecord = null;
+      _runtimeLogInstalled = false;
+    }
     try {
       await _debugMcpHost?.stop();
     } catch (e) {

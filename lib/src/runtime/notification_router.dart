@@ -8,6 +8,13 @@ import '../logging/logger.dart';
 /// Callback invoked when a `notifications/message` (MCP logging spec)
 /// arrives. Hosts typically push the payload into a `LogBuffer` for the
 /// in-app log viewer.
+/// Receives one record from the UI DSL runtime's own logger.
+///
+/// A host installs this so the runtime's diagnostics land where its other
+/// logs do. Without it they reach `dart:developer` and nobody else, which is
+/// the wrong audience for a message written for the document's author.
+typedef RuntimeLogHandler = void Function(MCPLogRecord record);
+
 typedef McpLogMessageHandler = void Function(
     String serverId, Map<String, dynamic> params);
 
