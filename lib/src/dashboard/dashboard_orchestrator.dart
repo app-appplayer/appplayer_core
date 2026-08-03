@@ -11,6 +11,8 @@ import '../storage/server_storage.dart';
 import 'dashboard_bundle.dart';
 import 'dashboard_bundle_loader.dart';
 import 'slot_binder.dart';
+import 'slot_state_bridge.dart';
+import 'slot_widget_factory.dart';
 import 'summary_view_resolver.dart';
 
 /// Composes Dashboard Mode: loads a bundle, binds slots to devices,
@@ -51,6 +53,9 @@ class DashboardOrchestrator {
   MCPUIRuntime? _currentRuntime;
   DashboardBundle? _currentBundle;
 
+  /// One per mounted slot; torn down with the dashboard.
+  final List<SlotStateBridge> _bridges = <SlotStateBridge>[];
+
   MCPUIRuntime? get current => _currentRuntime;
 
   /// FR-DASH-001
@@ -69,6 +74,13 @@ class DashboardOrchestrator {
 
     final runtimeHandle = _runtimeHandle(bundle.id);
     final runtime = _runtime.getOrCreateRuntime(runtimeHandle);
+    // Registered before `initialize`, not after: schema validation consults
+    // the widget registry, so a `slot` node in the layout is only accepted if
+    // the factory is already there.
+    runtime.registerWidget(
+      'slot',
+      SlotWidgetFactory(runtimeManager: _runtime, logger: _logger),
+    );
     if (!runtime.isInitialized) {
       await runtime.initialize(bundle.mainLayout);
     }
@@ -149,10 +161,25 @@ class DashboardOrchestrator {
       'slot.${binding.slotId}.deviceId',
       binding.deviceId,
     );
+
+    // §3.5.5 — the device's state becomes readable and writable at
+    // `slot.<id>.<path>`. Mounting without this left the dashboard able to
+    // place a device and unable to react to one.
+    final bridge = SlotStateBridge(
+      dashboard: dashRuntime,
+      device: deviceRuntime,
+      slotId: binding.slotId,
+      logger: _logger,
+    )..start();
+    _bridges.add(bridge);
   }
 
   /// FR-DASH-008
   Future<void> close() async {
+    for (final bridge in _bridges) {
+      await bridge.dispose();
+    }
+    _bridges.clear();
     final bundle = _currentBundle;
     if (bundle == null) {
       _currentRuntime = null;
