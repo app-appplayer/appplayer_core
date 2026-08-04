@@ -11,7 +11,6 @@
 // protocol.
 
 import 'package:appplayer_core/appplayer_core.dart';
-import 'package:appplayer_core/internals.dart' show LogEntry, LogSource;
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
     show MCPLogger, MCPLogRecord;
 import 'package:flutter_test/flutter_test.dart';
