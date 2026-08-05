@@ -1,3 +1,22 @@
+## [0.1.20] - 2026-08-05 — floors move to the spec 1.4.1 cut
+
+No source change in this package. The floors move because a caret bound on a
+`0.x` minor cannot reach the next one, so without this bump a consumer of
+`appplayer_core` keeps resolving the previous runtime and never sees the cut:
+
+- `flutter_mcp_ui_core` — the registry narrows in four places (retired legacy
+  enum spellings on `linear.distribution` and `qrCode.errorCorrection`, the
+  `otpInput.autoSubmit` property, and a required `value` on option objects),
+  which is what makes that release a minor rather than a patch.
+- `flutter_mcp_ui_runtime` — vector assets (SVG) draw in every `AssetRef`
+  slot including `icon`, union-typed slots read every branch they declare
+  (`Dimension` objects, action lists, bindings in enum and `EdgeInsets`
+  slots), ink overlays paint above what the document paints, and ten declared
+  properties gained implementations. Brings `flutter_svg` transitively.
+
+Consumers that pin `appplayer_core` need only this bump; the surface they
+compile against is unchanged.
+
 ## [0.1.19] - 2026-08-03 — mcp_ui 1.4 cut
 
 Floors `flutter_mcp_ui_core ^0.4.3 → ^0.5.0` and
