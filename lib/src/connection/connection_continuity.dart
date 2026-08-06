@@ -106,6 +106,10 @@ class ConnectionContinuity implements ContinuityController {
         .toList();
     for (final serverId in stale) {
       _logger.info('continuity.sweep.reconnect', {'serverId': serverId});
+      // A wake is new information (a peripheral signalled, a push landed), so
+      // whatever backoff had grown while the link was dead does not describe
+      // this moment — clear it so the monitor's next pass starts fast again.
+      _healthMonitor?.resetReconnectAttempts(serverId);
       await _connections.reconnect(serverId);
     }
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:appplayer_core/appplayer_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState, Logger;
@@ -67,6 +69,63 @@ void main() {
             'notifications/resources/updated',
             any(),
           )).called(1);
+    });
+
+    test('IT-001b: an open app marks its server engaged for reconnect pacing',
+        () async {
+      // Before opening, the server is idle: reconnects back off so a dead
+      // server nobody is watching is not dialled every second forever.
+      expect(core.healthMonitorForInternals.isEngaged?.call('s1'), isFalse);
+
+      final session = await core.openAppFromServer('s1');
+      expect(core.healthMonitorForInternals.isEngaged?.call('s1'), isTrue,
+          reason: 'An app on screen must not be paced like an idle server');
+      // …and only that server.
+      expect(core.healthMonitorForInternals.isEngaged?.call('s2'), isFalse);
+
+      await session.close();
+      expect(core.healthMonitorForInternals.isEngaged?.call('s1'), isFalse,
+          reason: 'Closing the app hands the server back to the backoff');
+    });
+
+    test('IT-001c: stalledServers names only what an open app is waiting on',
+        () async {
+      final session = await core.openAppFromServer('s1');
+      // Connected and open: nothing is stalled, so nothing should be watched.
+      expect(core.stalledServers, isEmpty);
+
+      // The link drops on its own (BLE supervision timeout, socket closed).
+      core.connections['s1']!.state = ConnectionState.error;
+      expect(core.stalledServers, {'s1'},
+          reason: 'An open app on a failed connection is worth listening for');
+
+      await session.close();
+      expect(core.stalledServers, isEmpty,
+          reason: 'A closed app must not keep a radio running');
+    });
+
+    test('IT-001d: the network returning dials what is failed, once per edge',
+        () async {
+      final online = StreamController<bool>();
+      core.bindOnlineChanges(online.stream);
+      await core.openAppFromServer('s1');
+      core.connections['s1']!.state = ConnectionState.error;
+      final before = core.healthMonitorForInternals.getReconnectAttempts('s1');
+
+      online.add(true); // first observation — where we are, not a transition
+      await Future<void>.delayed(Duration.zero);
+      expect(core.healthMonitorForInternals.getReconnectAttempts('s1'), before,
+          reason: 'A launch that starts online must not dial');
+
+      online
+        ..add(false)
+        ..add(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(core.healthMonitorForInternals.getReconnectAttempts('s1'),
+          greaterThan(before),
+          reason: 'The regain edge dials — this is the only signal a remote '
+              'server has');
+      await online.close();
     });
 
     test('IT-002: UC-002 — second openAppFromServer reuses connection',

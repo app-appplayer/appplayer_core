@@ -1,3 +1,88 @@
+## [0.1.21] - 2026-08-06 — an open app keeps trying to reconnect
+
+`ConnectionHealthMonitor` gave a server up for good once its attempt count ran
+out. The count only clears when a health check observes `connected`, and after
+the monitor stops retrying that can never happen — so a foreground app with the
+screen on sat there not dialling, and only leaving and re-entering it (or a
+background round trip, or a wake) brought the connection back. Found on real
+hardware: switch a hotspot off and back on a minute later and the board never
+returns.
+
+The tier that hurt first was the one tuned to recover fastest. `checkInterval`
+was doing two jobs — the keepalive/detection sweep AND the retry pace — so Pro
+dropping it to 2s to catch BLE hard-drops also burned its 5 attempts in about
+fifteen seconds, against ~105s for the default tier.
+
+- The two cadences are now separate. `checkInterval` paces detection only;
+  retries pace themselves with an exponential backoff (`reconnectDelay`
+  doubling up to the new `maxReconnectDelay`, default 30s).
+- `maxReconnectAttempts` defaults to `0` = unlimited: while monitoring runs the
+  monitor does not give up. What keeps a dead server from being dialled every
+  couple of seconds is the backoff ceiling, not an attempt count. Hosts that
+  want the old behaviour can still pass a positive cap.
+- One reconnect in flight per server: a fast sweep no longer stacks a dial on
+  top of the one already waiting out its backoff.
+- `startMonitoring()` clears grown backoff (a foreground return is new
+  information), `stopMonitoring()` stands down a reconnect already waiting, and
+  a wake-driven `sweepStale()` resets the backoff for what it sweeps.
+- An app open on a server does not back off at all. The backoff exists to stop
+  dialling a server nobody is looking at; a full-screen app is the explicit
+  statement that this connection is supposed to exist, and the user is watching
+  it fail. Engaged servers retry at the first interval (Pro: every ~1s) for as
+  long as the app is open, and an explicit host cap does not strand them either.
+  Hosts declare this through the new `isEngaged` seam; `appplayer_core` wires it
+  to "a runtime is open for `AppHandle.server(id)`". A dashboard tile is
+  deliberately NOT engaged — treating every tiled server that way would dial the
+  whole home screen every second.
+- That fixed interval is fixed against the clock, not against the sweep. An
+  engaged retry re-arms from inside its own chain; leaving the next attempt to
+  the health sweep made the real spacing `reconnectDelay + up to one
+  checkInterval`, so Pro's 1s was landing as 1-3s. The loop exits on exactly
+  three conditions — the app closed, the connection entry is gone, or monitoring
+  stopped — so nothing dials a server nobody is watching, or a serverId that no
+  longer exists.
+- The "max attempts reached" warning is logged on the transition instead of on
+  every tick — at a 2s cadence it was filling the log.
+
+Behaviour change, intended: every tier now retries indefinitely while
+foreground. Nothing to change at call sites — `maxReconnectDelay` is additive
+and the default flip is the fix.
+
+Floors: `mcp_client ^2.1.0 → ^2.2.0` (internal dependency at its latest
+published version). Everything else was already there.
+
+SRS NFR-REL-002/003 + new NFR-REL-005/006, FR-HEALTH-003/004/006 + new
+FR-HEALTH-007 · DDD/TEST `connection-health-monitor` · regressions
+TC-HEALTH-010~019 and IT-001b (11 mutations killed, including the wiring).
+
+New: `hintReachable([serverId])` on the core service — the door for "this may
+be reachable now" signals (network returned, device sighted on the discovery
+axis, user pressed retry). A connection waiting out its interval dials at once
+instead of at the end of a number picked without knowing anything; omitting the
+id serves every failed connection, which is the only path remote/cloud servers
+have (nothing ever "sights" them). Signals accelerate; they do not replace the
+timer, because no single signal source covers every transport.
+
+`bindOnlineChanges(Stream<bool>)` turns a host's network-availability source
+into that signal, firing on the offline→online **edge** only — platforms repeat
+"connected" for every interface change, and the first observation says where we
+are rather than that anything changed (treating it as a regain dials on every
+launch). It lives here rather than in a host recipe because it needs no radio
+and no plugin, every tier already depends on this package, and it is the only
+reachability signal a remote / cloud server has.
+
+Paired with it, `stalledServers` — the servers an open app is waiting on
+(failed connection ∩ app open). A host that wants to *hear* a device come back
+rather than dial for it should observe exactly these and stop when the set
+empties; observing everything ever registered is the always-on scan the
+discovery axis was deliberately scoped away from.
+
+The retry pace applies between dials, never on top of one: the chain awaits its
+attempt and holds the server's slot across it, so a 1s pace on a dial that takes
+five seconds is one dial every six, not five overlapping ones. Bounding the dial
+itself stays with the host connector (Pro bounds board dials at 20s); core
+`connect()` has no deadline of its own.
+
 ## [0.1.20] - 2026-08-05 — floors move to the spec 1.4.1 cut
 
 No source change in this package. The floors move because a caret bound on a

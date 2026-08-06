@@ -626,6 +626,12 @@ class AppPlayerCoreService {
       config: healthConfig,
       logger: _logger,
     );
+    // A server with its app open is not a candidate for backing off — the user
+    // is looking at it and the open app is itself the statement that this
+    // connection is supposed to exist. Only the full-screen app counts; a
+    // dashboard summary tile does not (see `isEngaged`).
+    _health.isEngaged = (serverId) =>
+        _runtime.getRuntime(AppHandle.server(serverId)) != null;
     _health.startMonitoring();
 
     // Platform integration foundation (FR-PLATFORM). Ports default to NoOp;
@@ -1607,6 +1613,54 @@ class AppPlayerCoreService {
   Listenable get lifecycleListenable =>
       Listenable.merge(<Listenable>[_conn, _runtime]);
 
+  /// Bind the host's "is there a network" stream so the core dials the moment
+  /// one returns (FR-HEALTH-010).
+  ///
+  /// Fires on the offline→online **edge** only. Not every event: platforms
+  /// repeat "connected" for every interface change. Not the first event
+  /// either — the first observation says where we are, not that anything
+  /// changed, so treating it as a regain dials on every launch.
+  ///
+  /// Lives here rather than in a host recipe because it needs no radio and no
+  /// plugin: the host maps its platform source (connectivity_plus, a route
+  /// watch) to `Stream<bool>` and every tier already depends on this package.
+  /// It is also the ONLY reachability signal a remote / cloud server has —
+  /// nothing local ever sights an HTTPS endpoint the way a board is sighted.
+  void bindOnlineChanges(Stream<bool> online) {
+    _assertReady();
+    unawaited(_onlineSub?.cancel());
+    bool? wasOnline;
+    _onlineSub = online.listen((isOnline) {
+      final was = wasOnline;
+      wasOnline = isOnline;
+      if (was == false && isOnline) {
+        _logger.info('network regained — dialling stalled connections', {});
+        hintReachable();
+      }
+    });
+  }
+
+  /// Servers an open app is stalled on — the connection failed AND an app is
+  /// open on it (FR-HEALTH-009). Changes are announced through
+  /// [lifecycleListenable], since both inputs live behind it.
+  ///
+  /// This is the set worth spending a radio on. A host that wants to hear a
+  /// device come back (BLE advertisement, mDNS announcement, a port
+  /// reappearing) should observe exactly these and stop when the set empties —
+  /// observing everything ever registered means scanning forever, which is the
+  /// cost the discovery axis was deliberately scoped to avoid. What comes back
+  /// through [hintReachable] closes the loop.
+  Set<String> get stalledServers {
+    _assertReady();
+    final engaged = _health.isEngaged;
+    if (engaged == null) return const {};
+    return _conn.connections.entries
+        .where((e) =>
+            e.value.state == ConnectionState.error && engaged(e.key))
+        .map((e) => e.key)
+        .toSet();
+  }
+
   /// True when a stdio / HTTP connection for [serverId] is live
   /// (`ConnectionState.connected`). Used by the launcher to paint the
   /// "connected" dot on server-type and dashboard-type tiles.
@@ -1696,6 +1750,36 @@ class AppPlayerCoreService {
     return _runtime;
   }
 
+  /// Tell the core a server may be reachable again (FR-HEALTH-008): the network
+  /// returned, the device was sighted on the discovery axis, the user pressed
+  /// retry. A connection waiting out its retry interval dials immediately.
+  ///
+  /// Omit [serverId] for a signal that names no server — connectivity coming
+  /// back says nothing about which server it helps, so everything currently
+  /// failed is retried. That is the path remote/cloud servers depend on: they
+  /// are never "sighted" the way a local board is.
+  ///
+  /// Hints are free to be wrong. A hint that turns out to be premature costs
+  /// one dial; the timed retry underneath it is unaffected.
+  void hintReachable([String? serverId]) {
+    _assertReady();
+    if (serverId == null) {
+      _health.retryAllNow();
+    } else {
+      _health.retryNow(serverId);
+    }
+  }
+
+  /// Test-only — the health monitor, so the reconnect-pacing wiring
+  /// (`isEngaged`) can be asserted against a really-open app rather than
+  /// assumed. An unwired seam here is invisible: every reconnect still works,
+  /// just slower and slower on the one screen the user is watching.
+  @visibleForTesting
+  ConnectionHealthMonitor get healthMonitorForInternals {
+    _assertReady();
+    return _health;
+  }
+
   @visibleForTesting
   ToolDispatcher get toolDispatcherForInternals {
     _assertReady();
@@ -1709,6 +1793,8 @@ class AppPlayerCoreService {
   }
 
   /// FR-CORE-006
+  StreamSubscription<bool>? _onlineSub;
+
   Future<void> dispose() async {
     if (!_initialized) return;
     if (_runtimeLogInstalled) {
@@ -1725,6 +1811,8 @@ class AppPlayerCoreService {
     _debugMcpHost = null;
     _debugSurface = null;
     _health.stopMonitoring();
+    await _onlineSub?.cancel();
+    _onlineSub = null;
     await _lifecycle.dispose();
     _scheduler.dispose();
     await _dashboard.close();
