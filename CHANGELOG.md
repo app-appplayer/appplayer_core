@@ -1,3 +1,21 @@
+## [0.1.22] - 2026-08-06 — a reattach reports what it achieved, not what it tried
+
+`resubscribed after reconnect` logged `count: <number of URIs attempted>`. A
+reattach where every single subscribe was refused printed the same line as one
+where all of them landed, with the failures on their own earlier lines — so the
+summary read as success. It was read as success: someone debugging a board that
+had gone silent took it for a healthy reattach and looked elsewhere.
+
+- The line now carries `resubscribed` and `failed` separately.
+- `reattach` returns a `ReattachResult` instead of nothing, so the two numbers
+  are assertable rather than only printable. `isTotalFailure` is the case that
+  matters — the connection is up and every stream on it is dead.
+- `appplayer_core` warns once per reattach that re-subscribed nothing, at a
+  level a log reader notices, rather than leaving it to be inferred.
+
+Reported by a consumer board (ESP32 air-quality node) whose owner misread the
+line exactly as described.
+
 ## [0.1.21] - 2026-08-06 — an open app keeps trying to reconnect
 
 `ConnectionHealthMonitor` gave a server up for good once its attempt count ran

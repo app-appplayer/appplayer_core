@@ -198,7 +198,7 @@ void main() {
       when(() => fresh.readResource(any()))
           .thenAnswer((_) async => _result('{"b":2}'));
 
-      await subscriber.reattach(
+      final result = await subscriber.reattach(
         client: fresh,
         runtime: runtime,
         ownerKey: 'srv-1',
@@ -206,6 +206,55 @@ void main() {
 
       verify(() => fresh.subscribeResource('data://b')).called(1);
       verify(() => state.set('b', 2)).called(1);
+      // Attempts and successes are different numbers. Reporting the attempt
+      // count is what made a fully-refused reattach read as a successful one.
+      expect(result.resubscribed, 1);
+      expect(result.failed, 1);
+      expect(result.isTotalFailure, isFalse);
+    });
+
+    test('a reattach where everything is refused says so', () async {
+      when(() => client.subscribeResource(any())).thenAnswer((_) async {});
+      when(() => client.readResource(any()))
+          .thenAnswer((_) async => _result('{"a":1}'));
+
+      final subscriber = ResourceSubscriber();
+      for (final uri in <String>['data://a', 'data://b']) {
+        await subscriber.subscribe(
+          client: client,
+          runtime: runtime,
+          uri: uri,
+          binding: uri,
+          ownerKey: 'srv-1',
+        );
+      }
+
+      final fresh = MockClient();
+      when(() => fresh.subscribeResource(any()))
+          .thenThrow(StateError('refused'));
+
+      final result = await subscriber.reattach(
+        client: fresh,
+        runtime: runtime,
+        ownerKey: 'srv-1',
+      );
+
+      // The connection is up and every stream is dead — the case that was
+      // indistinguishable from success in the log.
+      expect(result.resubscribed, 0);
+      expect(result.failed, 2);
+      expect(result.isTotalFailure, isTrue);
+    });
+
+    test('nothing to reattach is not a failure', () async {
+      final result = await ResourceSubscriber().reattach(
+        client: MockClient(),
+        runtime: runtime,
+        ownerKey: 'srv-unknown',
+      );
+      expect(result.resubscribed, 0);
+      expect(result.failed, 0);
+      expect(result.isTotalFailure, isFalse);
     });
   });
 }

@@ -1735,12 +1735,26 @@ class AppPlayerCoreService {
         serverId: serverId,
         onMcpLogMessage: _onMcpLogMessage,
       );
-      unawaited(_resourceSub
-          .reattach(client: client, runtime: runtime, ownerKey: handle.key)
-          .catchError((Object e, StackTrace st) {
-        _logger.logError('reattach after reconnect failed', e, st,
-            {'serverId': serverId, 'handle': handle.toString()});
-      }));
+      unawaited(() async {
+        try {
+          final result = await _resourceSub.reattach(
+              client: client, runtime: runtime, ownerKey: handle.key);
+          // Every subscription refused is a screen that will stay frozen while
+          // the connection looks healthy. Say so at the level someone reading
+          // logs will notice, rather than leaving it to be inferred from
+          // per-URI lines above.
+          if (result.isTotalFailure) {
+            _logger.warn('reattach re-subscribed nothing', {
+              'serverId': serverId,
+              'handle': handle.toString(),
+              'failed': result.failed,
+            });
+          }
+        } catch (e, st) {
+          _logger.logError('reattach after reconnect failed', e, st,
+              {'serverId': serverId, 'handle': handle.toString()});
+        }
+      }());
     }
   }
 

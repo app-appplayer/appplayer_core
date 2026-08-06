@@ -7,6 +7,26 @@ import 'package:mcp_client/mcp_client.dart' hide Logger;
 import '../exceptions.dart';
 import '../logging/logger.dart';
 
+/// What a [ResourceSubscriber.reattach] actually achieved.
+///
+/// Returned rather than only logged because the two numbers are the whole
+/// point: a reattach that re-subscribed nothing is a device that has gone
+/// quiet, and reporting the attempt count made that indistinguishable from
+/// success.
+class ReattachResult {
+  const ReattachResult({this.resubscribed = 0, this.failed = 0});
+
+  /// Resources whose `resources/subscribe` reached the server.
+  final int resubscribed;
+
+  /// Resources whose subscribe was refused or threw. The stream for these is
+  /// still dead after the reattach.
+  final int failed;
+
+  /// True when the reattach had work to do and none of it landed.
+  bool get isTotalFailure => resubscribed == 0 && failed > 0;
+}
+
 /// Handles MCP resource subscribe / unsubscribe, initial read, and runtime
 /// binding registration (MOD-RUNTIME-004, FR-RES-001~004).
 ///
@@ -126,17 +146,21 @@ class ResourceSubscriber {
   /// Bindings are therefore NOT re-registered here; the initial read is, so
   /// the first value after a resume is current rather than whatever was on
   /// screen when the app went away.
-  Future<void> reattach({
+  Future<ReattachResult> reattach({
     required Client client,
     required MCPUIRuntime runtime,
     required String ownerKey,
   }) async {
     final uris = _active[ownerKey];
-    if (uris == null || uris.isEmpty) return;
+    if (uris == null || uris.isEmpty) return const ReattachResult();
+    var resubscribed = 0;
+    var failed = 0;
     for (final uri in List<String>.from(uris)) {
       try {
         await SharedResourceSubscriptions.subscribe(client, uri);
+        resubscribed++;
       } catch (e, st) {
+        failed++;
         _logger.logError('resubscribe after reconnect failed', e, st,
             {'uri': uri, 'ownerKey': ownerKey});
         continue;
@@ -154,8 +178,17 @@ class ResourceSubscriber {
         _logger.warn('resubscribe initial read failed', {'uri': uri}, e);
       }
     }
-    _logger.info('resubscribed after reconnect',
-        {'ownerKey': ownerKey, 'count': uris.length});
+    // Successes and failures, separately. This used to report the number of
+    // URIs ATTEMPTED under the name `count`, so a reattach where every
+    // resource was refused still printed `resubscribed … count: 2` with the
+    // failures on their own earlier lines — which reads as success and was
+    // misread as success by someone debugging a device that had gone quiet.
+    _logger.info('resubscribed after reconnect', {
+      'ownerKey': ownerKey,
+      'resubscribed': resubscribed,
+      'failed': failed,
+    });
+    return ReattachResult(resubscribed: resubscribed, failed: failed);
   }
 
   /// Snapshot of active subscription URIs per ownerKey (test helper).
