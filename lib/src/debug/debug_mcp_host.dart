@@ -6,6 +6,8 @@
 ///   * `ui.tree`       — render tree with per-node bounds.
 ///   * `ui.tap`        — synthetic tap by coordinate or element id.
 ///   * `ui.type`       — text injection into the focused field.
+///   * `ui.text`       — the text actually painted, with rects.
+///   * `ui.scroll`     — scroll the surface, so a long page can be inspected.
 ///
 /// Desktop-only, settings-gated (see `AppPlayerCoreService.initialize`).
 /// Built on `ServerBootstrap` from `package:brain_kernel/mcp_host.dart`.
@@ -114,6 +116,106 @@ class DebugMcpHost {
       handler: (args) async {
         final nodes = _surface.layoutSnapshot();
         return _textResult(jsonEncode(<String, dynamic>{'nodes': nodes}));
+      },
+    );
+
+    boot.addTool(
+      name: 'ui.text',
+      description: 'Every piece of text currently painted, with its rect: '
+          '`{texts:[{text, rect:[x,y,w,h]}]}`. Reads the render tree, so it '
+          'sees what the user sees whatever produced it.',
+      inputSchema: <String, dynamic>{
+        'type': 'object',
+        'properties': <String, dynamic>{
+          'contains': <String, dynamic>{
+            'type': 'string',
+            'description': 'Only entries containing this substring.',
+          },
+        },
+      },
+      handler: (args) async {
+        final needle = (args['contains'] as String?)?.trim();
+        var texts = _surface.textSnapshot();
+        if (needle != null && needle.isNotEmpty) {
+          texts = texts
+              .where((t) => (t['text'] as String? ?? '').contains(needle))
+              .toList();
+        }
+        return _textResult(jsonEncode(<String, dynamic>{'texts': texts}));
+      },
+    );
+
+    boot.addTool(
+      name: 'ui.scroll',
+      description: 'Scroll the surface under a point. `dy` positive scrolls '
+          'down (default 300), `dx` optional; `x`/`y` default to the centre. '
+          'Without this a long page cannot be inspected at all — the part '
+          'below the fold is invisible to every other tool here.',
+      inputSchema: <String, dynamic>{
+        'type': 'object',
+        'properties': <String, dynamic>{
+          'dy': <String, dynamic>{'type': 'number'},
+          'dx': <String, dynamic>{'type': 'number'},
+          'x': <String, dynamic>{'type': 'number'},
+          'y': <String, dynamic>{'type': 'number'},
+        },
+      },
+      handler: (args) async {
+        final size = _surface.surfaceSize();
+        if (size == null) return _errorResult('surface not attached');
+        final x = _asDouble(args['x']) ?? size.width / 2;
+        final y = _asDouble(args['y']) ?? size.height / 2;
+        final dy = _asDouble(args['dy']) ?? 300;
+        final dx = _asDouble(args['dx']) ?? 0;
+        await _surface.dispatchScroll(x, y, dy, dx);
+        return _textResult(jsonEncode(<String, dynamic>{
+          'ok': true,
+          'x': x,
+          'y': y,
+          'dy': dy,
+          'dx': dx,
+        }));
+      },
+    );
+
+    boot.addTool(
+      name: 'ui.drag',
+      description: 'Drag from one point to another. `holdMs` (default 600) is '
+          'the press before the move, which is what a long-press draggable '
+          'waits for.',
+      inputSchema: <String, dynamic>{
+        'type': 'object',
+        'properties': <String, dynamic>{
+          'x': <String, dynamic>{'type': 'number'},
+          'y': <String, dynamic>{'type': 'number'},
+          'toX': <String, dynamic>{'type': 'number'},
+          'toY': <String, dynamic>{'type': 'number'},
+          'holdMs': <String, dynamic>{'type': 'number'},
+        },
+        'required': <String>['x', 'y', 'toX', 'toY'],
+      },
+      handler: (args) async {
+        final size = _surface.surfaceSize();
+        if (size == null) return _errorResult('surface not attached');
+        final x = _asDouble(args['x']);
+        final y = _asDouble(args['y']);
+        final toX = _asDouble(args['toX']);
+        final toY = _asDouble(args['toY']);
+        if (x == null || y == null || toX == null || toY == null) {
+          return _errorResult('x, y, toX and toY are required');
+        }
+        await _surface.dispatchDrag(
+          x,
+          y,
+          toX,
+          toY,
+          holdMs: (_asDouble(args['holdMs']) ?? 600).round(),
+        );
+        return _textResult(jsonEncode(<String, dynamic>{
+          'ok': true,
+          'from': <double>[x, y],
+          'to': <double>[toX, toY],
+        }));
       },
     );
 

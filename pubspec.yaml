@@ -20,8 +20,8 @@ dependencies:
   flutter:
     sdk: flutter
   mcp_client: ^2.2.0
-  flutter_mcp_ui_core: ^0.6.0
-  flutter_mcp_ui_runtime: ^0.7.0
+  flutter_mcp_ui_core: ^0.6.1
+  flutter_mcp_ui_runtime: ^0.7.1
   mcp_bundle: ^0.4.9
   # brain_kernel — drives the bundle's 8 knowledge/tool categories. The
   # core auto-creates a BundleActivation and registers it with the

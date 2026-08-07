@@ -110,7 +110,65 @@ class DebugSurface {
     }
 
     visit(root);
+    if (out.isNotEmpty) return out;
+
+    // Nothing carried metadata. That is not the same as "nothing is on
+    // screen", and returning an empty list said the opposite: a caller reads
+    // `{nodes: []}` as an empty page and stops looking. Fall back to what the
+    // render tree itself knows — text and its position — which is enough to
+    // find a label, assert a value, or aim a tap.
+    return textSnapshot();
+  }
+
+  /// Every piece of text actually painted, with where it sits.
+  ///
+  /// Reads `RenderParagraph`, so it sees what the user sees regardless of
+  /// which widget produced it — a screen assembled by a runtime that attaches
+  /// no metadata still answers.
+  List<Map<String, dynamic>> textSnapshot() {
+    final root = _captureRenderBox();
+    if (root == null) return const <Map<String, dynamic>>[];
+    final out = <Map<String, dynamic>>[];
+    void visit(RenderObject ro) {
+      if (ro is RenderParagraph && ro.hasSize && ro.attached) {
+        final text = ro.text.toPlainText().trim();
+        if (text.isNotEmpty) {
+          final rect = MatrixUtils.transformRect(
+            ro.getTransformTo(root),
+            Offset.zero & ro.size,
+          );
+          out.add(<String, dynamic>{
+            'type': 'text',
+            'text': text,
+            'rect': <double>[rect.left, rect.top, rect.width, rect.height],
+          });
+        }
+      }
+      ro.visitChildren(visit);
+    }
+
+    visit(root);
     return out;
+  }
+
+  /// The rendered surface's size, or null before it is attached.
+  Size? surfaceSize() => _captureRenderBox()?.size;
+
+  /// Scroll by [dy] logical pixels (positive scrolls down) at ([x], [y]).
+  ///
+  /// A pointer scroll, not a scrollable's controller: the surface under the
+  /// cursor is whatever the document put there, and driving a controller would
+  /// require knowing which one — which is exactly what a caller inspecting an
+  /// unfamiliar screen does not know.
+  Future<void> dispatchScroll(double x, double y, double dy, double dx) async {
+    final binding = WidgetsBinding.instance;
+    final position = Offset(x, y);
+    binding.handlePointerEvent(PointerHoverEvent(position: position));
+    binding.handlePointerEvent(PointerScrollEvent(
+      position: position,
+      scrollDelta: Offset(dx, dy),
+    ));
+    await binding.endOfFrame;
   }
 
   // ── Element-rect resolution ────────────────────────────────────
@@ -214,6 +272,63 @@ class DebugSurface {
         position: position,
         kind: kind,
       ),
+      hitResult,
+    );
+  }
+
+  /// Drags from ([x], [y]) to ([toX], [toY]).
+  ///
+  /// [holdMs] is how long the pointer rests before moving — a long-press
+  /// draggable needs it, a plain one does not. The move is sent in steps
+  /// because a single jump does not look like a drag to a recogniser: it sees
+  /// one enormous delta and no gesture in between.
+  Future<void> dispatchDrag(
+    double x,
+    double y,
+    double toX,
+    double toY, {
+    int holdMs = 600,
+    int steps = 12,
+  }) async {
+    final binding = GestureBinding.instance;
+    final start = Offset(x, y);
+    final end = Offset(toX, toY);
+    var stamp = SchedulerBinding.instance.currentSystemFrameTimeStamp;
+    final pointer = _nextPointer++;
+    final kind = _pointerKind();
+
+    final hitResult = HitTestResult();
+    // ignore: deprecated_member_use
+    binding.hitTest(hitResult, start);
+    binding.dispatchEvent(
+      PointerDownEvent(
+          timeStamp: stamp, pointer: pointer, position: start, kind: kind),
+      hitResult,
+    );
+    await Future<void>.delayed(Duration(milliseconds: holdMs));
+
+    var previous = start;
+    for (var i = 1; i <= steps; i++) {
+      final position = Offset.lerp(start, end, i / steps)!;
+      stamp += const Duration(milliseconds: 16);
+      binding.dispatchEvent(
+        PointerMoveEvent(
+          timeStamp: stamp,
+          pointer: pointer,
+          position: position,
+          delta: position - previous,
+          kind: kind,
+        ),
+        hitResult,
+      );
+      previous = position;
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+
+    stamp += const Duration(milliseconds: 16);
+    binding.dispatchEvent(
+      PointerUpEvent(
+          timeStamp: stamp, pointer: pointer, position: end, kind: kind),
       hitResult,
     );
   }

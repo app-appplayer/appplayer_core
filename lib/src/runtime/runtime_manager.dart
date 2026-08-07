@@ -10,9 +10,18 @@ import '../session/app_handle.dart';
 /// Keying on [AppHandle] separates `server:` and `bundle:` namespaces so the
 /// same id string cannot collide across sources (FR-SESSION-006).
 class RuntimeManager extends ChangeNotifier {
-  RuntimeManager({Logger? logger}) : _logger = logger ?? NoopLogger();
+  RuntimeManager({Logger? logger, RuntimeCapabilities? capabilities})
+      : _logger = logger ?? NoopLogger(),
+        _capabilities = capabilities ?? RuntimeCapabilities.none;
 
   final Logger _logger;
+
+  /// Platform powers every runtime this manager creates is given (UI DSL
+  /// §6.13): sound, media decoding, a web engine, a tile source. The runtime
+  /// performs what is wired here and reports what is not — a tier that wires
+  /// none still renders documents, and every affected widget says so through
+  /// `onError` instead of drawing something that looks like it works.
+  final RuntimeCapabilities _capabilities;
   final Map<AppHandle, MCPUIRuntime> _runtimes = {};
 
   Map<AppHandle, MCPUIRuntime> get runtimes => Map.unmodifiable(_runtimes);
@@ -30,6 +39,7 @@ class RuntimeManager extends ChangeNotifier {
     }
     _logger.debug('Creating runtime', {'handle': handle.toString()});
     final runtime = MCPUIRuntime();
+    runtime.engine.capabilities = _capabilities;
     _runtimes[handle] = runtime;
     notifyListeners();
     return runtime;

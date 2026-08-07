@@ -1,4 +1,16 @@
-## [0.1.22] - 2026-08-06 — a reattach reports what it achieved, not what it tried
+## [0.1.22] - 2026-08-07 — a drag can be dispatched, a bundled asset can be read, and a reattach reports what it achieved
+
+**`ui.drag` on the debug host.** Tap, type, scroll and screenshot were there;
+drag was not, so a widget whose behaviour *is* a drag — a tree that reorders, a
+kanban card that moves — could not be verified on a running app at all. The
+gesture is dispatched as a press, a held interval, stepped moves and a release:
+one jump is not a drag to a recogniser, it is one enormous delta with no
+gesture in between.
+
+**`bundleRootPath` reaches the media path.** A bundled sound arrives as a
+`file:` reference after the core rewrites `bundle://`, and nothing downstream
+could read those bytes — playback worked (the player opens the path itself)
+while anything needing the bytes, such as a waveform, got nothing.
 
 `resubscribed after reconnect` logged `count: <number of URIs attempted>`. A
 reattach where every single subscribe was refused printed the same line as one

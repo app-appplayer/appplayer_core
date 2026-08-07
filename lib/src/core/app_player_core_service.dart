@@ -521,6 +521,7 @@ class AppPlayerCoreService {
     CredentialVault? credentialVault,
     HealthMonitorConfig? healthConfig,
     ValueListenable<Brightness>? hostBrightness,
+    RuntimeCapabilities runtimeCapabilities = RuntimeCapabilities.none,
     McpLogMessageHandler? onMcpLogMessage,
     SettingsStore? settingsStore,
     // Platform integration (FR-PLATFORM). All optional — when the shell
@@ -549,7 +550,10 @@ class AppPlayerCoreService {
     _storage = storage;
     _bundleInstallRoot = bundleInstallRoot;
     _conn = ConnectionManager(logger: _logger, connector: _testConnector);
-    _runtime = RuntimeManager(logger: _logger);
+    // UI DSL §6.13 — the platform powers this host can actually perform. A
+    // tier that wires none is still conformant: every affected widget reports
+    // the absence instead of drawing a facsimile of it working.
+    _runtime = RuntimeManager(logger: _logger, capabilities: runtimeCapabilities);
     _appLoader = ApplicationLoader(logger: _logger);
     _toolDispatcher = ToolDispatcher(logger: _logger);
     _resourceSub = ResourceSubscriber(logger: _logger);
@@ -1095,8 +1099,11 @@ class AppPlayerCoreService {
   Future<AppMetadata> fetchBundleMetadata(BundleRef bundleRef) async {
     _assertReady();
     final bundle = await _bundleLoader.load(bundleRef);
-    final uriResolver =
-        BundleUriResolver(assets: bundle.assets, logger: _logger);
+    final uriResolver = BundleUriResolver(
+      assets: bundle.assets,
+      bundleRootPath: bundle.directory,
+      logger: _logger,
+    );
     final metadata = _metadataProvider.fromBundle(bundle, uriResolver);
     await _metadataProvider.publish(metadata);
     _metadataCache[AppHandle.bundle(bundle.manifest.id)] = metadata;
@@ -1150,6 +1157,13 @@ class AppPlayerCoreService {
 
     final uriResolver = BundleUriResolver(
       assets: bundle.assets,
+      // The installed bundle's own directory. Without it a `bundle://` URI
+      // that names a file on disk — the normal shape for an installed app's
+      // assets — resolves to nothing, and the reference reaches the runtime
+      // unrewritten. That was visible only for media: an image slot silently
+      // fell back, while a sound reported "could not read". Both were the same
+      // missing root.
+      bundleRootPath: bundle.directory,
       logger: _logger,
     );
 
