@@ -1,0 +1,185 @@
+{
+  "purpose": "Every expression form the 1.4 spec writes down, with the answer the spec says it has. Meant to run inside the release gate, before upload — not by an author after publication.",
+  "source": "specs/mcp_ui_dsl/spec/1.4/03_Data_Binding.md §3.2 · §3.6.1 · §3.6.2 · §3.6.3 · §3.8",
+  "state": {
+    "at": 125.5,
+    "price": 1234.5,
+    "quantity": 3,
+    "name": "hanok",
+    "text": "a,b,c",
+    "items": [
+      {
+        "status": "done",
+        "completed": true,
+        "price": 10,
+        "qty": 2
+      },
+      {
+        "status": "open",
+        "completed": false,
+        "price": 5,
+        "qty": 4
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "path",
+      "expr": "{{at}}",
+      "expect": 125.5,
+      "spec": "§3.1"
+    },
+    {
+      "id": "arith-div",
+      "expr": "{{at / 60}}",
+      "expect": 2.091666666666667,
+      "spec": "§3.2.2"
+    },
+    {
+      "id": "arith-mod",
+      "expr": "{{at % 60}}",
+      "expect": 5.5,
+      "spec": "§3.2.2"
+    },
+    {
+      "id": "arith-mul",
+      "expr": "{{price * quantity}}",
+      "expect": 3703.5,
+      "spec": "§3.2.2"
+    },
+    {
+      "id": "fn-plain-arg",
+      "expr": "{{floor(at)}}",
+      "expect": 125,
+      "spec": "§3.6.1"
+    },
+    {
+      "id": "fn-two-args",
+      "expr": "{{round(at, 1)}}",
+      "expect": 125.5,
+      "spec": "§3.6.1"
+    },
+    {
+      "id": "fn-upper",
+      "expr": "{{toUpperCase(name)}}",
+      "expect": "HANOK",
+      "spec": "§3.6.1"
+    },
+    {
+      "id": "fn-arith-arg-literal",
+      "expr": "{{floor(9 / 2)}}",
+      "expect": 4,
+      "spec": "§3.2.1 grammar — FunctionCall argument is an Expression, and Expression includes BinaryOp",
+      "known_failing": "0.5.1 · 0.6.1 · 0.7.1 · 0.7.2 — returns empty"
+    },
+    {
+      "id": "fn-arith-arg-state",
+      "expr": "{{floor(at / 60)}}",
+      "expect": 2,
+      "spec": "§3.2.1",
+      "known_failing": "same"
+    },
+    {
+      "id": "fn-arith-arg-spec-example",
+      "expr": "{{round(price * quantity, 2)}}",
+      "expect": 3703.5,
+      "spec": "§3.6.1 writes this exact line as its own example",
+      "known_failing": "same — the documented example does not work"
+    },
+    {
+      "id": "fn-mod-arg",
+      "expr": "{{floor(at % 60)}}",
+      "expect": 5,
+      "spec": "§3.2.1",
+      "known_failing": "same"
+    },
+    {
+      "id": "fn-nested",
+      "expr": "{{length(filter(items, 'completed'))}}",
+      "expect": 1,
+      "spec": "§3.6.1 example",
+      "known_failing": "not the nesting — `length(filter(items,'status','done'))` is correct. The one-property `filter(list,'prop')` shorthand (§3.6.2) returns nothing, so length() of it is 0."
+    },
+    {
+      "id": "fn-quoted-comma",
+      "expr": "{{format(price, '#,##0.00')}}",
+      "expect": "1,234.50",
+      "spec": "§3.6.1 example",
+      "fixed_in": "0.7.1"
+    },
+    {
+      "id": "fn-shorthand-filter",
+      "expr": "{{filter(items, 'status', 'done')}}",
+      "spec": "§3.6.2",
+      "expectNonEmptyList": true
+    },
+    {
+      "id": "fn-shorthand-reduce",
+      "expr": "{{reduce(items, 'price')}}",
+      "expect": 15,
+      "spec": "§3.6.2"
+    },
+    {
+      "id": "fn-method-form",
+      "expr": "{{name.toUpperCase()}}",
+      "expect": "HANOK",
+      "spec": "§3.6.4"
+    },
+    {
+      "id": "fn-split-comma",
+      "expr": "{{join(split(text, ','), '-')}}",
+      "expect": "a-b-c",
+      "spec": "§3.6.1"
+    },
+    {
+      "id": "ternary",
+      "expr": "{{at > 100 ? 'long' : 'short'}}",
+      "expect": "long",
+      "spec": "§3.2.2"
+    },
+    {
+      "id": "interpolated",
+      "expr": "{{floor(at)}} s / 47 s",
+      "expect": "125 s / 47 s",
+      "spec": "§3.1"
+    },
+    {
+      "id": "interpolated-arith-arg",
+      "expr": "{{floor(at / 60)}}:{{floor(at % 60)}}",
+      "expect": "2:5",
+      "spec": "§3.1",
+      "known_failing": "renders as ':' — the empty value is silent, so a wrong screen ships"
+    },
+    {
+      "id": "ctr-filter-alone",
+      "expr": "{{filter(items, 'completed')}}",
+      "expectNonEmptyList": true,
+      "spec": "§3.6.2 shorthand",
+      "known_failing": "§3.6.2 `filter(items, 'active')` truthy shorthand renders empty"
+    },
+    {
+      "id": "ctr-length-list",
+      "expr": "{{length(items)}}",
+      "expect": 2,
+      "spec": "§3.6.1"
+    },
+    {
+      "id": "ctr-length-filter-kv",
+      "expr": "{{length(filter(items, 'status', 'done'))}}",
+      "expect": 1,
+      "spec": "§3.6.2 + §3.6.1"
+    },
+    {
+      "id": "ctr-length-string",
+      "expr": "{{length(name)}}",
+      "expect": 5,
+      "spec": "§3.6.1"
+    }
+  ],
+  "binding_readback": {
+    "spec": "02_Widgets.md §2.6.0 — normative: the runtime reads the current value from the path",
+    "case": "set state path from elsewhere, then read the widget's displayed value",
+    "known_failing": "slider: `binding` never reads back (`value` does). slider_factory reads properties['value'] only; `binding` is used on write. Identical in 0.5.1 · 0.6.1 · 0.7.2.",
+    "untested": "the other §2.6 input widgets — binding is a shared contract, so the same shape may hold"
+  }
+}
