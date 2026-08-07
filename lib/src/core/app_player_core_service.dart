@@ -163,6 +163,14 @@ class AppPlayerCoreService {
   DebugSurface? _debugSurface;
   DebugMcpHost? _debugMcpHost;
 
+  /// How this tier puts an installed bundle on screen, for the debug host's
+  /// `app.open`. Left null by a tier that has no shell — the tool then
+  /// reports that it cannot open rather than pretending it did.
+  /// Answers whether it actually put the bundle on screen. A door that
+  /// reports success without opening is worse than no door: the harness that
+  /// calls it then measures the screen it was already on.
+  Future<bool> Function(String bundleId)? debugOpenBundle;
+
   bool _initialized = false;
 
   /// Global key of the debug capture `RepaintBoundary`, or null when the
@@ -744,7 +752,26 @@ class AppPlayerCoreService {
     if (enableDebugMcp && supported) {
       try {
         final surface = DebugSurface();
-        final host = DebugMcpHost(surface);
+        final host = DebugMcpHost(
+          surface,
+          // The core knows what is installed; the shell knows how to put one
+          // on screen. A harness that had neither had to register a bundle in
+          // the user's app list to reach it — which changes the thing it is
+          // measuring.
+          listBundles: () async => [
+            // The manifest id is the handle; the version rides along so a
+            // harness can tell two installs of the same bundle apart.
+            for (final b in await listInstalledBundles())
+              (id: b.id, name: '${b.id} (${b.version})'),
+          ],
+          openBundle: (id) async {
+            final open = debugOpenBundle;
+            if (open == null) return false;
+            final installed = await listInstalledBundles();
+            if (!installed.any((b) => b.id == id)) return false;
+            return open(id);
+          },
+        );
         await host.start(port: debugMcpPort);
         _debugSurface = surface;
         _debugMcpHost = host;

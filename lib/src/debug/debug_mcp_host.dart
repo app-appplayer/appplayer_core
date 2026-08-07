@@ -26,9 +26,22 @@ import 'debug_capture.dart';
 /// per `AppPlayerCoreService` when the Debug MCP setting is enabled on a
 /// desktop platform.
 class DebugMcpHost {
-  DebugMcpHost(this._surface);
+  DebugMcpHost(this._surface, {this.listBundles, this.openBundle});
 
   final DebugSurface _surface;
+
+  /// Installed bundles, for a harness that must open one by id.
+  final Future<List<({String id, String name})>> Function()? listBundles;
+
+  /// Opens an installed bundle. The tier supplies this — the core knows what
+  /// is installed, only the shell knows how to put it on screen.
+  ///
+  /// Without it a harness has to reach the bundle through the launcher, which
+  /// means registering it in the tier's app list first; a probe that edits the
+  /// user's app registry to run is a probe that changes what it measures (and
+  /// loses whatever the running copy writes back).
+  final Future<bool> Function(String bundleId)? openBundle;
+
   ServerBootstrap? _boot;
 
   /// Bind the endpoint on `127.0.0.1:[port]/mcp` and register the four
@@ -177,6 +190,54 @@ class DebugMcpHost {
         }));
       },
     );
+
+    if (listBundles != null) {
+      boot.addTool(
+        name: 'app.bundles',
+        description: 'Installed bundles as `{id, name}` — what `app.open` can '
+            'be asked for.',
+        inputSchema: <String, dynamic>{
+          'type': 'object',
+          'properties': <String, dynamic>{},
+        },
+        handler: (args) async {
+          final bundles = await listBundles!();
+          return _textResult(jsonEncode(<String, dynamic>{
+            'bundles': [
+              for (final b in bundles)
+                <String, dynamic>{'id': b.id, 'name': b.name},
+            ],
+          }));
+        },
+      );
+    }
+
+    if (openBundle != null) {
+      boot.addTool(
+        name: 'app.open',
+        description: 'Open an installed bundle by id, without going through '
+            'the launcher.',
+        inputSchema: <String, dynamic>{
+          'type': 'object',
+          'properties': <String, dynamic>{
+            'id': <String, dynamic>{'type': 'string'},
+          },
+          'required': <String>['id'],
+        },
+        handler: (args) async {
+          final id = (args['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) {
+            return _errorResult('id is required');
+          }
+          final opened = await openBundle!(id);
+          if (!opened) {
+            return _errorResult('no installed bundle with id',
+                extra: <String, dynamic>{'id': id});
+          }
+          return _textResult(jsonEncode(<String, dynamic>{'ok': true, 'id': id}));
+        },
+      );
+    }
 
     boot.addTool(
       name: 'ui.drag',

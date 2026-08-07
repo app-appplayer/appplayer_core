@@ -1,3 +1,24 @@
+## [0.1.23] - 2026-08-07 — a harness can open a bundle without editing the app list
+
+**`app.bundles` / `app.open` on the debug host.** Reaching an installed bundle
+meant going through the launcher, which meant registering it in the user's app
+registry first — a probe that edits what it measures. `app.open` routes through
+the shell instead: the core knows what is installed, the tier supplies
+`AppPlayerCoreService.debugOpenBundle` and only it knows how to put a screen up.
+A tier that wires nothing gets a tool that reports it cannot open, never one
+that claims success — the same rule the UI DSL applies to capabilities.
+
+**`tool/capability_probe/`.** `analyze 0`, a full suite and a clean dry-run are
+statements about source; none of them opens the built app. Two defects shipped
+on 2026-08-07 that no source gate could see — a bundled PDF and Lottie drew an
+empty box, and a web build carried a stale plugin registrant so connectivity,
+audio and video were never registered. The probe builds a bundle exercising
+every declared capability and reads the running app: did the section report
+`(none)`, and did it put pixels on its own background. Platform views are
+judged by their report alone — a Flutter screenshot does not capture a native
+view, so pixels would read blank however well they work. Verified by
+re-introducing the byte-path defect: `pdf: reported <empty>`.
+
 ## [0.1.22] - 2026-08-07 — a drag can be dispatched, a bundled asset can be read, and a reattach reports what it achieved
 
 **`ui.drag` on the debug host.** Tap, type, scroll and screenshot were there;
