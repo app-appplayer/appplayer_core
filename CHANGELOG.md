@@ -1,3 +1,10 @@
+## [0.1.25] - 2026-08-08 — floors move to the cut that draws a late topology
+
+No source change. `flutter_mcp_ui_core ^0.6.3` and `flutter_mcp_ui_runtime
+^0.7.4`: a caret bound on a `0.x` minor cannot reach the next one, so without
+this a host keeps resolving the previous runtime and never sees the fix for a
+bound `networkGraph.nodes` that arrives after the first frame.
+
 ## [0.1.24] - 2026-08-08 — two live sessions stop fighting over the theme
 
 The runtime's `ThemeManager` is a process-wide singleton, and a session
