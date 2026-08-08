@@ -1,3 +1,18 @@
+## [0.1.24] - 2026-08-08 — two live sessions stop fighting over the theme
+
+The runtime's `ThemeManager` is a process-wide singleton, and a session
+rebaselined it on every build whenever ownership had changed hands. With two
+sessions on screen at once — a harness opening a second app over the first, a
+shell stacking renderer routes, Cloud's launcher model doing exactly that —
+each build took the singleton from the other, every apply notified listeners
+from inside a build (`setState() called during build`), and the frame never
+settled: measured live as a page transition frozen mid-slide.
+
+Ownership answers "did the app change"; it does not answer "would applying
+again change anything", which is the question that matters when two sessions
+are alive. The rebaseline now skips when the content it would apply is already
+the content in place, whoever applied it.
+
 ## [0.1.23] - 2026-08-07 — a harness can open a bundle without editing the app list
 
 **`app.bundles` / `app.open` on the debug host.** Reaching an installed bundle

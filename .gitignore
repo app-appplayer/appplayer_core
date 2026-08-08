@@ -13,3 +13,6 @@ coverage/
 # a clone never resolves against a path that exists only on one machine.
 pubspec_overrides.yaml
 **/pubspec_overrides.yaml
+
+# Scratch output of the corpus gate: a bundle it stages before installing.
+tool/capability_probe/_corpus_build/

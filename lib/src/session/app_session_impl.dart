@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_mcp_ui_core/flutter_mcp_ui_core.dart'
@@ -106,6 +107,11 @@ class AppSessionImpl implements AppSession {
   /// identity hash — ANY external mutation invalidates the skip.
   static String? _themeAppliedFingerprint;
 
+  /// The theme CONTENT we last applied. Ownership answers "did the app
+  /// change"; this answers "would applying again change anything", which is
+  /// the question that matters when two sessions are alive at once.
+  static String? _themeAppliedContent;
+
   /// Rebuild the theme state for THIS app on every entry/build.
   ///
   /// One-shot setup is not reliable (singleton residue + dispose clears the
@@ -115,19 +121,28 @@ class AppSessionImpl implements AppSession {
   void _rebaselineTheme() {
     final tm = _runtime.engine.themeManager;
     final owner = handle.toString();
+    final own = _runtime.engine.applicationDefinition?.theme;
+    // What THIS session would apply. Two sessions can be on screen at once (a
+    // harness opening a second app over the first, a shell stacking renderer
+    // routes), and ownership alone made them take the singleton from each
+    // other on every build — each apply notifies, the notify rebuilds the
+    // other, and the frame never settles. Live: a page transition frozen
+    // mid-slide and `setState() during build` in the log. When the content is
+    // already what we would apply, there is nothing to do, whoever applied it.
+    final wanted = own == null ? 'baseline' : jsonEncode(own);
     // Skip only when the singleton state is PROVABLY still ours: same owner
-    // AND untouched fingerprint. A destroy/reset anywhere flips the
-    // fingerprint, forcing a fresh apply.
-    final intact = _themeStateOwner == owner &&
+    // (or identical content) AND untouched fingerprint. A destroy/reset
+    // anywhere flips the fingerprint, forcing a fresh apply.
+    final intact = (_themeStateOwner == owner || _themeAppliedContent == wanted) &&
         _themeAppliedFingerprint == tm.fingerprint;
     if (!intact) {
-      final own = _runtime.engine.applicationDefinition?.theme;
       if (own != null) {
         tm.setTheme(own);
       } else {
         tm.setThemeDefinition(_systemBaselineTheme);
       }
       _themeStateOwner = owner;
+      _themeAppliedContent = wanted;
       _logger.debug('session.theme.rebaseline', {
         'handle': owner,
         'declared': own != null,

@@ -82,6 +82,62 @@ void main() {
     });
   });
 
+  group('AppSessionImpl — two live sessions', () {
+    testWidgets(
+        'the second session does not re-apply a theme identical to the first',
+        (tester) async {
+      // The ThemeManager is a process-wide singleton. Two sessions on screen
+      // at once — a harness opening a second app over the first, a shell
+      // stacking renderer routes — took it from each other on every build:
+      // each apply notifies, the notify rebuilds the other, and the frame
+      // never settles. Live symptom: a page transition frozen mid-slide and
+      // `setState() called during build` in the log, with the second app's
+      // page truncated out of the tree. Neither app declares a theme here, so
+      // the content is identical and the second entry has nothing to do.
+      final runtime = MCPUIRuntime();
+      addTearDown(() => runtime.engine.themeManager.setHostBrightness(null));
+
+      late BuildContext ctx;
+      await tester.pumpWidget(Builder(builder: (c) {
+        ctx = c;
+        return const SizedBox();
+      }));
+
+      AppSessionImpl sessionFor(String id) => AppSessionImpl(
+            handle: AppHandle.bundle(id),
+            runtime: runtime,
+            conn: ConnectionManager(),
+            runtimeManager: RuntimeManager(),
+            toolDispatcher: ToolDispatcher(),
+            resourceSubscriber: ResourceSubscriber(),
+            logger: NoopLogger(),
+          );
+
+      void enter(AppSessionImpl s) {
+        try {
+          s.buildWidget(context: ctx);
+        } on StateError {
+          // expected — the runtime is uninitialized in this harness; the
+          // rebaseline has already run by the time it throws.
+        }
+      }
+
+      enter(sessionFor('com.example.first'));
+      final afterFirst = runtime.engine.themeManager.fingerprint;
+
+      // A second session builds, then the first rebuilds, then the second
+      // again — the alternation that made them fight.
+      enter(sessionFor('com.example.second'));
+      enter(sessionFor('com.example.first'));
+      enter(sessionFor('com.example.second'));
+
+      expect(runtime.engine.themeManager.fingerprint, afterFirst,
+          reason: 'a rebaseline that changes nothing must not re-apply: '
+              'applying notifies listeners, and a notify from inside a build '
+              'is what broke the frame');
+    });
+  });
+
   group('AppSessionImpl — accessor surface', () {
     test('handle / source / bundle / metadata round-trip', () {
       const handle = AppHandle.bundle('com.example.x');
