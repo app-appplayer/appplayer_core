@@ -10,6 +10,7 @@
 // and a drift here means the hook and the rest of the app disagree about
 // where a tool goes.
 
+import 'package:appplayer_core/src/exceptions.dart';
 import 'package:appplayer_core/src/runtime/tool_dispatcher.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -31,13 +32,21 @@ void main() {
       expect(seen['menu.list'], <String, dynamic>{'store': 'a'});
     });
 
-    test('an unknown tool with no client reports rather than throwing',
-        () async {
+    test('an unknown tool with no client reports AND fails', () async {
+      // "A call that goes nowhere has to say so" — the callback still fires,
+      // and the call now fails as well. Returning null said so to the host log
+      // and said *success* to the document: the runtime reads a null return as
+      // a call that worked and carried no payload, so a misspelled tool name
+      // ran `onSuccess` and the page continued as though the server had
+      // answered.
       final unrouted = <String>[];
       final dispatcher = ToolDispatcher();
       final router = dispatcher.routerFor(null, onNoClient: unrouted.add);
 
-      expect(await router('menu.list', <String, dynamic>{}), isNull);
+      await expectLater(
+        router('menu.list', <String, dynamic>{}),
+        throwsA(isA<ToolExecutionException>()),
+      );
       expect(unrouted, <String>['menu.list'],
           reason: 'a call that goes nowhere has to say so');
     });

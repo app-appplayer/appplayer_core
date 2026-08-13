@@ -16,6 +16,8 @@ library;
 import 'dart:convert';
 import 'dart:ui' show Rect;
 
+import 'package:flutter/gestures.dart' show kPrimaryButton, kSecondaryButton;
+
 import 'package:brain_kernel/brain_kernel.dart'
     show KernelImageContent, KernelTextContent, KernelToolResult;
 import 'package:brain_kernel/mcp_host.dart' show ServerBootstrap;
@@ -282,8 +284,9 @@ class DebugMcpHost {
 
     boot.addTool(
       name: 'ui.tap',
-      description: 'Dispatch a synthetic tap. Provide `elementId` to tap a '
-          'node center, or `x`/`y` logical coordinates.',
+      description: 'Dispatch a synthetic tap, long-press or secondary-button '
+          'press. Provide `elementId` to hit a node center, or `x`/`y` '
+          'logical coordinates.',
       inputSchema: <String, dynamic>{
         'type': 'object',
         'properties': <String, dynamic>{
@@ -293,10 +296,41 @@ class DebugMcpHost {
             'type': 'string',
             'description': 'Node id in `<type>:<key>` or bare `<key>` form.',
           },
+          'longPress': <String, dynamic>{
+            'type': 'boolean',
+            'description': 'Hold long enough for a long-press recogniser '
+                '(default false). A press is a tap with a longer rest, so it '
+                'is this tool with one flag rather than a second tool.',
+          },
+          'holdMs': <String, dynamic>{
+            'type': 'integer',
+            'description': 'Gap between down and up, in ms. Overrides '
+                '`longPress`; the default is 40, and `longPress` uses 600.',
+          },
+          'button': <String, dynamic>{
+            'type': 'string',
+            'enum': <String>['primary', 'secondary'],
+            'description': 'Pointer button (default `primary`). `secondary` '
+                'is the right-click gesture a context menu hangs off.',
+          },
         },
       },
       handler: (args) async {
         final elementId = args['elementId'] as String?;
+        final longPress = args['longPress'] == true;
+        final holdArg = args['holdMs'];
+        final holdMs = holdArg is num
+            ? holdArg.toInt()
+            : (longPress ? 600 : 40);
+        final buttonArg = (args['button'] as String?)?.toLowerCase();
+        if (buttonArg != null &&
+            buttonArg != 'primary' &&
+            buttonArg != 'secondary') {
+          return _errorResult('button must be `primary` or `secondary`',
+              extra: <String, dynamic>{'button': buttonArg});
+        }
+        final buttons =
+            buttonArg == 'secondary' ? kSecondaryButton : kPrimaryButton;
         double x;
         double y;
         if (elementId != null && elementId.isNotEmpty) {
@@ -317,11 +351,13 @@ class DebugMcpHost {
           x = ax;
           y = ay;
         }
-        await _surface.dispatchTap(x, y);
+        await _surface.dispatchTap(x, y, holdMs: holdMs, buttons: buttons);
         return _textResult(jsonEncode(<String, dynamic>{
           'ok': true,
           'x': x,
           'y': y,
+          'holdMs': holdMs,
+          'button': buttonArg ?? 'primary',
           if (elementId != null && elementId.isNotEmpty) 'elementId': elementId,
         }));
       },

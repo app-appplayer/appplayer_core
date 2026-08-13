@@ -238,7 +238,22 @@ class DebugSurface {
   /// Dispatch a synthetic tap at ([x], [y]) through Flutter's
   /// `GestureBinding` pointer pipeline — the same path a real pointer
   /// takes.
-  Future<void> dispatchTap(double x, double y, {int holdMs = 40}) async {
+  /// Dispatches a synthetic tap at ([x], [y]).
+  ///
+  /// [holdMs] is the gap between down and up. A long-press recogniser fires on
+  /// duration alone, so a press is this same path with a longer rest — no
+  /// second tool, and no second code path to keep in step with this one.
+  ///
+  /// [buttons] selects the pointer button ([kPrimaryButton] by default;
+  /// [kSecondaryButton] is the right-click / context-menu gesture). Passing it
+  /// is the only way to reach a `secondaryTap` handler, which is what a
+  /// context menu is usually hung off.
+  Future<void> dispatchTap(
+    double x,
+    double y, {
+    int holdMs = 40,
+    int buttons = kPrimaryButton,
+  }) async {
     final binding = GestureBinding.instance;
     final position = Offset(x, y);
     final now = SchedulerBinding.instance.currentSystemFrameTimeStamp;
@@ -255,6 +270,7 @@ class DebugSurface {
       pointer: pointer,
       position: position,
       kind: kind,
+      buttons: buttons,
     );
     final hitResult = HitTestResult();
     // Load-bearing two-step (hitTest + dispatchEvent). `hitTest` is
@@ -401,12 +417,26 @@ class DebugSurface {
     final controller = focused!.widget.controller;
     final before = controller.text;
     final after = clear ? text : before + text;
-    // Setting controller.value fires listeners → `onChanged` runs the
-    // same path a real keystroke takes.
-    controller.value = TextEditingValue(
+    final value = TextEditingValue(
       text: after,
       selection: TextSelection.collapsed(offset: after.length),
     );
+    // Assigning `controller.value` does not fire `onChanged`: Flutter reaches
+    // it from `updateEditingValue` → `_formatAndSetValue`, while an assignment
+    // goes down `_didChangeTextEditingValue`. The text appears either way, so
+    // the difference only shows in whatever hangs off `onChanged` — for the UI
+    // DSL runtime, that is every bound value.
+    //
+    // A field with no input connection (readOnly, or never focused by the
+    // platform) throws; fall back to the assignment and report which path was
+    // taken.
+    var asKeystroke = true;
+    try {
+      focused!.updateEditingValue(value);
+    } catch (_) {
+      controller.value = value;
+      asKeystroke = false;
+    }
     var submitted = false;
     if (submit) {
       final onSubmitted = focused!.widget.onSubmitted;
@@ -426,6 +456,9 @@ class DebugSurface {
       'after': after,
       'cleared': clear,
       'submitted': submitted,
+      // False: the field took the text without a keystroke, so anything the
+      // document hangs off `onChange` did not run.
+      'asKeystroke': asKeystroke,
     };
   }
 }

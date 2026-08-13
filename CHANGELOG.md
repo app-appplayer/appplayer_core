@@ -1,3 +1,33 @@
+## [0.1.26] - 2026-08-11
+
+### Fixed
+- Debug MCP `typeText` writes through `EditableTextState.updateEditingValue`,
+  so the field's `onChanged` runs. It previously assigned `controller.value`,
+  which does not fire it — bindings written from `onChanged` stayed empty. The
+  response carries `asKeystroke`, false when the field had no input connection
+  and the value had to be assigned. A `readOnly` field is now a no-op.
+
+- An unregistered tool with no connected server raises `ToolExecutionException`
+  instead of returning `null`. The runtime reads a null return as a successful
+  call with no payload, so a misspelled tool name reached `onSuccess`.
+
+- An in-process tool that reports failure in its payload (`{ok: false, code,
+  error}` — the kernel `mcp.*` and `bk.*` shape) is handed to the runtime as an
+  error result, matching what the external endpoint already did. The two routes
+  disagreed, so a failed `mcp.connect` resolved in-process fired `onSuccess`
+  with the error as its payload.
+
+### Added
+- `ui.tap` takes `longPress` (600 ms), `holdMs` and `button`
+  (`primary` | `secondary`). The response echoes both; an unknown button is
+  refused.
+
+### Changed
+- Floors: `flutter_mcp_ui_core ^0.6.4` · `flutter_mcp_ui_runtime ^0.7.6` ·
+  `brain_kernel ^0.2.1` · `mcp_client ^2.2.1`. A caret bound on a `0.x` minor
+  cannot reach the next one, so without the runtime floor a host keeps
+  resolving 0.7.5 and a callback declared as a list still does not run.
+
 ## [0.1.25] - 2026-08-08 — floors move to the cut that draws a late topology
 
 No source change. `flutter_mcp_ui_core ^0.6.3` and `flutter_mcp_ui_runtime

@@ -155,6 +155,32 @@ void main() {
       );
     });
 
+    test('routerFor(null): an unregistered tool fails instead of returning null',
+        () async {
+      // A null return reads as a successful call with no payload one layer up,
+      // so a misspelled tool name reached `onSuccess` and the document carried
+      // on as though the call had happened.
+      final dispatcher = ToolDispatcher();
+      final seen = <String>[];
+      final route = dispatcher.routerFor(null, onNoClient: seen.add);
+
+      await expectLater(
+        route('does.not.exist', const <String, dynamic>{}),
+        throwsA(isA<ToolExecutionException>()),
+      );
+      expect(seen, ['does.not.exist']);
+    });
+
+    test('routerFor(null): a registered in-process tool still answers',
+        () async {
+      final dispatcher = ToolDispatcher();
+      dispatcher.registerInProcessTools({'local.echo': (args) async => {'ok': true}});
+      final route = dispatcher.routerFor(null);
+
+      expect(await route('local.echo', const <String, dynamic>{}),
+          {'ok': true});
+    });
+
     test('callInProcess unknown tool → ToolNotFoundException', () async {
       final d = ToolDispatcher();
       await expectLater(
@@ -195,6 +221,66 @@ void main() {
         d.call(client: client, tool: 'boom', params: const {}),
         throwsA(isA<ToolExecutionException>()),
       );
+    });
+
+    test('router marks an in-process {ok:false} payload as an error result',
+        () async {
+      final d = ToolDispatcher();
+      d.registerInProcessTool(
+        'mcp.connect',
+        (_) async => const <String, dynamic>{
+          'ok': false,
+          'code': 'mcp.error',
+          'error': 'connect timed out after 15000ms',
+        },
+      );
+      final router = d.routerFor(null);
+      final out = await router('mcp.connect', const {});
+
+      expect(out, isA<Map<String, dynamic>>());
+      expect((out as Map)['isError'], isTrue);
+      final text = (out['content'] as List).single['text'] as String;
+      expect(text, contains('connect timed out'));
+      expect(text, contains('mcp.error'));
+    });
+
+    test('router leaves an in-process {ok:true} payload untouched', () async {
+      final d = ToolDispatcher();
+      d.registerInProcessTool(
+        'mcp.connect',
+        (_) async => const <String, dynamic>{'ok': true, 'id': 'node'},
+      );
+      final out = await d.routerFor(null)('mcp.connect', const {});
+      expect(out, const <String, dynamic>{'ok': true, 'id': 'node'});
+    });
+
+    test('call() marks an in-process {ok:false} payload the same way',
+        () async {
+      final d = ToolDispatcher();
+      d.registerInProcessTool(
+        'mcp.call_tool',
+        (_) async => const <String, dynamic>{
+          'ok': false,
+          'code': 'mcp.not_connected',
+          'error': 'no connection: node',
+        },
+      );
+      final out = await d.call(
+        client: client,
+        tool: 'mcp.call_tool',
+        params: const {},
+      );
+      expect((out as Map)['isError'], isTrue);
+    });
+
+    test('callInProcess keeps the raw payload for JS atoms', () async {
+      final d = ToolDispatcher();
+      d.registerInProcessTool(
+        'mcp.connect',
+        (_) async => const <String, dynamic>{'ok': false, 'code': 'x'},
+      );
+      final out = await d.callInProcess('mcp.connect', const {});
+      expect(out, const <String, dynamic>{'ok': false, 'code': 'x'});
     });
 
     test('inProcessToolNames returns an unmodifiable view', () {

@@ -68,6 +68,30 @@ class ToolDispatcher {
     }
   }
 
+  /// An in-process result in the shape the runtime reads failure from.
+  ///
+  /// A kernel tool reports failure in its payload (`{ok: false, code, error}`)
+  /// rather than by throwing. The external endpoint marks that payload
+  /// `isError` on the way out; the in-process path has to mark it too, or the
+  /// same call succeeds on one route and fails on the other. Without the mark
+  /// the runtime sees an ordinary payload and fires `onSuccess` for a call
+  /// that did not happen.
+  Future<dynamic> _callInProcessForRuntime(
+    String tool,
+    Map<String, dynamic> params,
+  ) async {
+    final result = await callInProcess(tool, params);
+    if (result is Map && result['ok'] == false) {
+      return <String, dynamic>{
+        'content': <Map<String, dynamic>>[
+          <String, dynamic>{'type': 'text', 'text': jsonEncode(result)},
+        ],
+        'isError': true,
+      };
+    }
+    return result;
+  }
+
   /// The routing a host hands the runtime as `onToolCall`: an in-process tool
   /// when there is no client, the full dispatch when there is.
   ///
@@ -81,9 +105,17 @@ class ToolDispatcher {
   }) {
     return (String tool, Map<String, dynamic> params) async {
       if (client == null) {
-        if (_inProcess.containsKey(tool)) return callInProcess(tool, params);
+        if (_inProcess.containsKey(tool)) {
+          return _callInProcessForRuntime(tool, params);
+        }
         onNoClient?.call(tool);
-        return null;
+        // Not `null`: the runtime reads a null return as a successful call
+        // with no payload, so a misspelled tool name came back as `onSuccess`
+        // and the document carried on as though the call had happened.
+        throw ToolExecutionException(
+          tool,
+          cause: StateError('no tool named "$tool" and no connected server'),
+        );
       }
       return call(client: client, tool: tool, params: params);
     };
@@ -98,14 +130,8 @@ class ToolDispatcher {
 
     // Try in-process first. If the tool is registered we skip the
     // external MCP forward and resolve it directly.
-    final inProc = _inProcess[tool];
-    if (inProc != null) {
-      try {
-        return await inProc(params);
-      } catch (e, st) {
-        _logger.logError('In-process tool failed', e, st, {'tool': tool});
-        throw ToolExecutionException(tool, cause: e);
-      }
+    if (_inProcess.containsKey(tool)) {
+      return _callInProcessForRuntime(tool, params);
     }
 
     final List<Tool> tools;
