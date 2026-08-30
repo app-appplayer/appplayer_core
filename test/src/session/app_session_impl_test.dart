@@ -4,7 +4,13 @@ import 'package:appplayer_core/src/session/app_handle.dart';
 import 'package:appplayer_core/src/session/app_session_impl.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
-    show MCPUIRuntime;
+    show
+        IdentityContext,
+        IdentityPromotion,
+        IdentityState,
+        IdentitySubjectKind,
+        MCPUIRuntime,
+        PromotionOutcome;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_bundle/mcp_bundle.dart' as mb;
 
@@ -214,6 +220,93 @@ void main() {
       );
       await s.close();
       expect(runtime.isDisposed, isTrue);
+    });
+  });
+
+  group('identity promotion is the host\'s act (spec 19 §5.3)', () {
+    // The runtime carries the machinery; who this viewer would be is something
+    // only whoever owns the sign-in knows. Core's job is to let that reach the
+    // session without handing out the runtime.
+    late MCPUIRuntime runtime;
+    late AppSessionImpl session;
+
+    setUp(() async {
+      runtime = MCPUIRuntime();
+      await runtime.initialize(<String, dynamic>{
+        'type': 'page',
+        'content': {'type': 'text', 'content': 'x'},
+      });
+      addTearDown(runtime.destroy);
+      session = AppSessionImpl(
+        handle: const AppHandle.server('s1'),
+        runtime: runtime,
+        conn: ConnectionManager(),
+        runtimeManager: RuntimeManager(),
+        toolDispatcher: ToolDispatcher(),
+        resourceSubscriber: ResourceSubscriber(),
+        logger: NoopLogger(),
+      );
+    });
+
+    test('a build that registers nothing reports promotion unsupported',
+        () async {
+      // The honest answer where there is no sign-in: a document that asks is
+      // told it cannot happen here, rather than shown a prompt going nowhere.
+      final result = await runtime.entrySession.promote();
+      expect(result.outcome, PromotionOutcome.unavailable);
+    });
+
+    test('a registered promotion runs and the identity takes effect', () async {
+      runtime.entrySession.adoptIdentity(
+        const IdentityContext(canPromote: true),
+      );
+      session.registerIdentityPromotion(
+        onPromote: () async => const IdentityPromotion.promoted(
+          IdentityContext(
+            state: IdentityState.identified,
+            subjectKind: IdentitySubjectKind.user,
+            subjectRef: 'uid-7',
+          ),
+        ),
+      );
+
+      final result = await runtime.entrySession.promote();
+
+      expect(result.outcome, PromotionOutcome.promoted);
+      expect(runtime.entrySession.identity.isIdentified, isTrue);
+      expect(runtime.entrySession.identity.subjectRef, 'uid-7');
+    });
+
+    test('a declined promotion leaves the viewer where they were', () async {
+      runtime.entrySession.adoptIdentity(
+        const IdentityContext(canPromote: true),
+      );
+      session.registerIdentityPromotion(
+        onPromote: () async => const IdentityPromotion.declined(),
+      );
+
+      final result = await runtime.entrySession.promote();
+
+      expect(result.outcome, PromotionOutcome.declined);
+      expect(runtime.entrySession.identity.isIdentified, isFalse,
+          reason: 'a viewer who backed out is still a guest');
+    });
+
+    test('release is registered separately from promote', () async {
+      // §5.3 — releasing is reversible and is its own handler. A build that
+      // can sign someone in but not out would strand them.
+      session.registerIdentityPromotion(
+        onPromote: () async => const IdentityPromotion.declined(),
+      );
+      expect((await runtime.entrySession.release()).outcome,
+          PromotionOutcome.unavailable);
+
+      session.registerIdentityPromotion(
+        onRelease: () async =>
+            const IdentityPromotion.promoted(IdentityContext.guest),
+      );
+      expect((await runtime.entrySession.release()).outcome,
+          PromotionOutcome.promoted);
     });
   });
 }

@@ -7,14 +7,13 @@ import 'package:appplayer_core/appplayer_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  final endpoint = Uri.parse('https://entry.example.test/api/e');
+  const host = 'entry.example.test';
 
   HttpEntryResolver resolverReturning(
     Object body, {
     void Function(Uri url, Map<String, String> headers)? spy,
   }) {
     return HttpEntryResolver(
-      endpoint: endpoint,
       fetch: (url, {headers = const <String, String>{}}) async {
         spy?.call(url, headers);
         if (body is String) return body;
@@ -23,16 +22,31 @@ void main() {
     );
   }
 
-  test('an https endpoint is required', () {
-    // A resolver answered by anyone on the path decides what a viewer sees
-    // and what authority they are handed.
+  test('a code without a host cannot be resolved', () async {
+    // The host is which registry answers. Resolving without one would mean
+    // guessing whose registry a code belongs to.
     expect(
-      () => HttpEntryResolver(
-        endpoint: Uri.parse('http://entry.example.test/api/e'),
-        fetch: (u, {headers = const <String, String>{}}) async => '{}',
-      ),
+      () => resolverReturning(<String, Object?>{}).resolve('c',
+          host: '', locale: 'en'),
       throwsArgumentError,
     );
+  });
+
+  test('the address follows the host the code arrived on', () async {
+    // Two issuers, one build. Each code goes to its own issuer's resolver —
+    // the failure this shape exists to prevent is asking the first about the
+    // second's code and being answered wrongly.
+    final seen = <Uri>[];
+    final resolver = resolverReturning(<String, Object?>{'status': 'denied'},
+        spy: (url, _) => seen.add(url));
+
+    await resolver.resolve('A1', host: 'entry.example.test', locale: 'en');
+    await resolver.resolve('B2', host: 'other.example.test', locale: 'en');
+
+    expect(seen.map((u) => u.toString()), <String>[
+      'https://entry.example.test/api/e/A1',
+      'https://other.example.test/api/e/B2',
+    ]);
   });
 
   test('the code becomes path segments and the locale is sent', () async {
@@ -45,7 +59,7 @@ void main() {
         sentHeaders = headers;
       },
     );
-    await resolver.resolve('fleet/ABC123', locale: 'ko-KR');
+    await resolver.resolve('fleet/ABC123', host: host, locale: 'ko-KR');
 
     expect(seen.toString(), 'https://entry.example.test/api/e/fleet/ABC123');
     expect(sentHeaders!['accept-language'], 'ko-KR');
@@ -80,7 +94,7 @@ void main() {
         'validUntil': '2026-07-29T11:00:00Z',
       });
 
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.isOk, isTrue);
       expect(target.issuer.name, 'Fleet Co');
       expect(target.identityPolicy, IdentityPolicy.optional);
@@ -99,7 +113,7 @@ void main() {
         'issuer': <String, dynamic>{'name': 'Fleet Co'},
         'target': <String, dynamic>{'kind': 'hologram', 'ref': 'x'},
       });
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.isOk, isFalse, reason: 'opening a guess is worse');
     });
 
@@ -109,7 +123,7 @@ void main() {
         'issuer': <String, dynamic>{'name': 'Fleet Co'},
         'target': <String, dynamic>{'kind': 'server', 'ref': 'https://x.test'},
       });
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.identityPolicy, IdentityPolicy.required);
     });
 
@@ -121,7 +135,7 @@ void main() {
         'target': <String, dynamic>{'kind': 'server', 'ref': 'https://x.test'},
         'grant': <String, dynamic>{'token': 't', 'expiresAt': 'never'},
       });
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.grant, isNull);
     });
 
@@ -132,30 +146,29 @@ void main() {
         'target': <String, dynamic>{'kind': 'server', 'ref': 'https://x.test'},
         'notice': <String, dynamic>{'kind': 'advisory', 'message': ''},
       });
-      expect((await resolver.resolve('c', locale: 'en')).notice, isNull);
+      expect((await resolver.resolve('c', host: host, locale: 'en')).notice, isNull);
     });
   });
 
   group('failure never becomes a guess', () {
     test('a non-JSON body is denied', () async {
       final resolver = resolverReturning('<html>nope</html>');
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.status, EntryStatus.denied);
       expect(target.isOk, isFalse);
     });
 
     test('a JSON array is denied', () async {
       final resolver = resolverReturning(<dynamic>[1, 2, 3]);
-      expect((await resolver.resolve('c', locale: 'en')).isOk, isFalse);
+      expect((await resolver.resolve('c', host: host, locale: 'en')).isOk, isFalse);
     });
 
     test('a transport failure is denied with a reason, not thrown', () async {
       final resolver = HttpEntryResolver(
-        endpoint: endpoint,
         fetch: (u, {headers = const <String, String>{}}) async =>
             throw StateError('offline'),
       );
-      final target = await resolver.resolve('c', locale: 'en');
+      final target = await resolver.resolve('c', host: host, locale: 'en');
       expect(target.status, EntryStatus.denied);
       expect(target.reason, 'resolver unreachable');
     });

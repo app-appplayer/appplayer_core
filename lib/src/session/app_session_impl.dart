@@ -229,6 +229,17 @@ class AppSessionImpl implements AppSession {
   }
 
   @override
+  void registerIdentityPromotion({
+    IdentityPromoter? onPromote,
+    IdentityPromoter? onRelease,
+  }) {
+    _runtime.entrySession.registerPromotion(
+      onPromote: onPromote,
+      onRelease: onRelease,
+    );
+  }
+
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;

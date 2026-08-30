@@ -14,9 +14,19 @@ import 'entry_target.dart';
 /// assumes where the registry lives, only that something dereferences codes
 /// (§2.1 resolver).
 abstract class EntryResolverPort {
+  /// [host] is the claimed host the code arrived on. It is required rather
+  /// than configured once because **the resolver operates the entry host
+  /// domain** (§2): the host says which registry this code belongs to. A build
+  /// that claims two hosts and asks one fixed resolver would be asking the
+  /// first issuer about the second issuer's code.
+  ///
   /// [locale] is sent so the issuer's own words come back translated — a host
   /// must never machine-translate an issuer's identity (§4.1.2).
-  Future<EntryTarget> resolve(String code, {required String locale});
+  Future<EntryTarget> resolve(
+    String code, {
+    required String host,
+    required String locale,
+  });
 }
 
 /// Why an entry could not be opened. Distinct from a resolver saying
@@ -111,8 +121,12 @@ class EntryPipeline {
 
   /// Resolve [code] and decide. Never falls back to another target: an entry
   /// that cannot be opened is reported, not substituted (§4.3).
-  Future<EntryDecision> decide(String code, {required String locale}) async {
-    final target = await _resolver.resolve(code, locale: locale);
+  Future<EntryDecision> decide(
+    String code, {
+    required String host,
+    required String locale,
+  }) async {
+    final target = await _resolver.resolve(code, host: host, locale: locale);
 
     if (!target.isOk) {
       _logger.debug('entry.reject', {

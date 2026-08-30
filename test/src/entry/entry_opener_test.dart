@@ -1,6 +1,7 @@
 /// Opening a resolved target (platform spec 19 §9.4-§9.5).
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:appplayer_core/appplayer_core.dart';
@@ -49,33 +50,56 @@ void main() {
     await session.close();
   });
 
-  test('a server target registers once and reuses the registration', () async {
-    const endpoint = 'https://fleet.example.test/mcp';
+  test('a server target registers once, on the key the transport reads',
+      () async {
+    // A closed loopback port: the dial must refuse at once rather than resolve
+    // and retry, because what is pinned here is the registration and a test
+    // that waits on the network is a test that reports the network.
+    const endpoint = 'http://127.0.0.1:1/mcp';
     final id = EntryOpener.serverIdFor(endpoint);
     final opener = EntryOpener(core: core);
 
-    // Connecting fails offline; what is pinned here is the registration,
-    // which happens before any dialling.
-    try {
-      await opener.open(
-        target: _ref(EntryTargetKind.server, endpoint),
-        entry: _entry(),
+    // The transport reports a failed dial by adding an error to a broadcast
+    // stream, and that does not arrive at an `await`. A plain try/catch here
+    // lets it through to the framework as an unhandled async error, so the
+    // zone has to be the one that swallows it.
+    Future<void> scan() {
+      final done = Completer<void>();
+      runZonedGuarded(
+        () async {
+          try {
+            await opener
+                .open(
+                  target: _ref(EntryTargetKind.server, endpoint),
+                  entry: _entry(),
+                )
+                .timeout(const Duration(seconds: 5));
+          } catch (_) {
+          } finally {
+            if (!done.isCompleted) done.complete();
+          }
+        },
+        (_, __) {
+          if (!done.isCompleted) done.complete();
+        },
       );
-    } catch (_) {}
+      return done.future;
+    }
+
+    await scan();
 
     final saved = await core.getServer(id);
     expect(saved, isNotNull);
     expect(saved!.name, 'Fleet Co',
         reason: 'the issuer names the row a person will later see');
-    expect(saved.transportConfig['url'], endpoint);
+    // `baseUrl` is what the transport factory reads. This assertion used to
+    // name `url`, which storage accepts and the factory rejects — so every
+    // scanned endpoint registered cleanly and then refused to dial, and the
+    // test that was supposed to catch it pinned the wrong key instead.
+    expect(saved.transportConfig['baseUrl'], endpoint);
 
     final before = (await core.listServers()).length;
-    try {
-      await opener.open(
-        target: _ref(EntryTargetKind.server, endpoint),
-        entry: _entry(),
-      );
-    } catch (_) {}
+    await scan();
     // Scanning the same medium twice must not accumulate a row per scan.
     expect((await core.listServers()).length, before);
   });

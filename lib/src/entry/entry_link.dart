@@ -26,16 +26,26 @@ enum EntryLinkRejection {
 /// A link that is an entry, or the reason it is not.
 @immutable
 class EntryLink {
-  const EntryLink._(this.code, this.rejection);
+  const EntryLink._(this.code, this.host, this.rejection);
 
-  const EntryLink.accepted(String code) : this._(code, null);
+  const EntryLink.accepted(String code, {required String host})
+      : this._(code, host, null);
 
   const EntryLink.rejected(EntryLinkRejection rejection)
-      : this._(null, rejection);
+      : this._(null, null, rejection);
 
   /// The opaque code. The link never says where it points — that is what lets
   /// a medium be rebound without reprinting it (§3.3).
   final String? code;
+
+  /// The claimed host the code arrived on.
+  ///
+  /// Carried because the resolver **operates the entry host domain** (§2): the
+  /// host is which registry this code belongs to. Dropping it here is why a
+  /// build that claims two hosts would ask the first issuer's resolver about
+  /// the second issuer's code — a question that cannot be answered correctly,
+  /// only answered wrongly.
+  final String? host;
 
   final EntryLinkRejection? rejection;
 
@@ -85,6 +95,6 @@ class EntryLink {
     if (code.isEmpty) {
       return const EntryLink.rejected(EntryLinkRejection.noCode);
     }
-    return EntryLink.accepted(code);
+    return EntryLink.accepted(code, host: uri.host.toLowerCase());
   }
 }

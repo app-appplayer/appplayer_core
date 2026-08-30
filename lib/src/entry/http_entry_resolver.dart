@@ -21,38 +21,50 @@ typedef EntryFetch = Future<String> Function(
   Map<String, String> headers,
 });
 
-/// Resolves an entry code against an HTTPS endpoint.
+/// Resolves an entry code against the issuer's own host.
+///
+/// The address is derived per call rather than configured once, because the
+/// resolver operates the entry host domain (§2). A fixed endpoint alongside a
+/// set of claimed hosts is the shape that silently sends one issuer's code to
+/// another issuer's registry — and a wrong answer there decides what the
+/// viewer is shown and what authority they are handed.
 class HttpEntryResolver implements EntryResolverPort {
   HttpEntryResolver({
-    required Uri endpoint,
     required EntryFetch fetch,
+    String path = defaultResolverPath,
     Logger? logger,
-  })  : _endpoint = endpoint,
+  })  : _path = path,
         _fetch = fetch,
-        _logger = logger ?? NoopLogger() {
-    if (_endpoint.scheme != 'https') {
-      // A resolver reached over plain http can be answered by anyone on the
-      // path, and its answer decides what the viewer is shown and what
-      // authority they are handed.
-      throw ArgumentError.value(
-        endpoint.toString(),
-        'endpoint',
-        'entry resolver endpoint must be https',
-      );
-    }
-  }
+        _logger = logger ?? NoopLogger();
 
-  final Uri _endpoint;
+  /// The resolver path space on the issuer's host. One value for every issuer:
+  /// a host reads every claimed domain with one controller, so a per-issuer
+  /// path would make the second issuer unreadable.
+  static const String defaultResolverPath = '/api/e';
+
+  final String _path;
   final EntryFetch _fetch;
   final Logger _logger;
 
   @override
-  Future<EntryTarget> resolve(String code, {required String locale}) async {
+  Future<EntryTarget> resolve(
+    String code, {
+    required String host,
+    required String locale,
+  }) async {
+    if (host.isEmpty) {
+      throw ArgumentError.value(host, 'host', 'entry host must not be empty');
+    }
+    // Always https: a resolver reached over plain http can be answered by
+    // anyone on the path.
+    //
     // The code is a path segment, not a query value: it is an identifier of a
     // resource, and encoding it keeps a partitioned code space intact.
-    final url = _endpoint.replace(
+    final url = Uri(
+      scheme: 'https',
+      host: host,
       pathSegments: <String>[
-        ..._endpoint.pathSegments.where((s) => s.isNotEmpty),
+        ..._path.split('/').where((s) => s.isNotEmpty),
         ...code.split('/').where((s) => s.isNotEmpty),
       ],
     );

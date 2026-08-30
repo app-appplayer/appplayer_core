@@ -1,4 +1,6 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
+    show IdentityPromoter;
 import 'package:mcp_bundle/mcp_bundle.dart' show McpBundle;
 
 import '../metadata/app_metadata.dart';
@@ -55,6 +57,27 @@ abstract class AppSession {
   /// to a working entry is how a stale binding hides. Always false for a
   /// session opened without an entry.
   bool get launchRouteMissing;
+
+  /// Wire how this host turns a guest into an identified viewer, and back
+  /// (platform spec 19 §5.3).
+  ///
+  /// Promotion is the **host's** act: the document may ask for it, the origin
+  /// re-authorizes, and the app takes no part. So the handlers belong to
+  /// whoever owns the sign-in, not to the runtime and not to core — core has
+  /// no idea who this viewer would be.
+  ///
+  /// Registering nothing leaves `identity.promote` / `identity.release`
+  /// unsupported, which is the honest answer on a build with no sign-in: a
+  /// document that asks gets told it cannot happen here rather than being
+  /// shown a prompt that goes nowhere.
+  ///
+  /// The session is not restarted and its state is not discarded — the
+  /// identity is published and bound expressions re-evaluate in place, which
+  /// is what §5.3 means by preserving the entry context.
+  void registerIdentityPromotion({
+    IdentityPromoter? onPromote,
+    IdentityPromoter? onRelease,
+  });
 
   /// Unsubscribe resources and destroy the underlying runtime. The server
   /// connection (if any) is not terminated because another session may be

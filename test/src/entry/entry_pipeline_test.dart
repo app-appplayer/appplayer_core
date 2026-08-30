@@ -17,7 +17,8 @@ class _StubResolver implements EntryResolverPort {
   String? lastLocale;
 
   @override
-  Future<EntryTarget> resolve(String code, {required String locale}) async {
+  Future<EntryTarget> resolve(String code,
+      {required String host, required String locale}) async {
     calls++;
     lastLocale = locale;
     return _answer;
@@ -73,14 +74,14 @@ void main() {
 
   group('§4.3 opening', () {
     test('an ok answer opens', () async {
-      final d = await _pipeline(_ok()).decide('c', locale: locale);
+      final d = await _pipeline(_ok()).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue);
       expect(d.identityRequired, isFalse);
     });
 
     test('required policy tells the host to identify first', () async {
       final d = await _pipeline(_ok(policy: IdentityPolicy.required))
-          .decide('c', locale: locale);
+          .decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue);
       expect(d.identityRequired, isTrue);
     });
@@ -92,7 +93,7 @@ void main() {
         resolver: resolver,
         supportedTargets: const <EntryTargetKind>{EntryTargetKind.server},
       );
-      await pipeline.decide('c', locale: locale);
+      await pipeline.decide('c', host: 'entry.example.test', locale: locale);
       expect(resolver.lastLocale, locale);
     });
   });
@@ -102,7 +103,7 @@ void main() {
       // Answering a demand for identity by ignoring it produces a screen that
       // looks like it worked.
       return _pipeline(_ok(policy: IdentityPolicy.required), canIdentify: false)
-          .decide('c', locale: locale)
+          .decide('c', host: 'entry.example.test', locale: locale)
           .then((d) {
         expect(d.canOpen, isFalse);
         expect(d.rejection, EntryRejection.identityUnavailable);
@@ -115,7 +116,7 @@ void main() {
         IdentityPolicy.optional,
       ]) {
         final d = await _pipeline(_ok(policy: policy), canIdentify: false)
-            .decide('c', locale: locale);
+            .decide('c', host: 'entry.example.test', locale: locale);
         expect(d.canOpen, isTrue, reason: 'the guest path needs no sign-in');
       }
     });
@@ -128,7 +129,7 @@ void main() {
         issuer: EntryIssuer(name: 'Fleet Co', verified: true),
         reason: 'medium retired',
       );
-      final d = await _pipeline(revoked).decide('c', locale: locale);
+      final d = await _pipeline(revoked).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isFalse);
       expect(d.rejection, EntryRejection.notOk);
       // The gate has to say who was asking, even on a failure.
@@ -141,7 +142,7 @@ void main() {
         status: EntryStatus.ok,
         issuer: EntryIssuer(name: 'Fleet Co'),
       );
-      final d = await _pipeline(headless).decide('c', locale: locale);
+      final d = await _pipeline(headless).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isFalse);
     });
 
@@ -149,7 +150,7 @@ void main() {
       final d = await _pipeline(
         _ok(validUntil: DateTime.utc(2026, 1, 1)),
         now: DateTime.utc(2026, 1, 2),
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.rejection, EntryRejection.stale,
           reason: 'custody may have changed since it was minted');
     });
@@ -158,7 +159,7 @@ void main() {
       final d = await _pipeline(
         _ok(validUntil: DateTime.utc(2026, 1, 3)),
         now: DateTime.utc(2026, 1, 2),
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue);
     });
 
@@ -170,7 +171,7 @@ void main() {
         final d = await _pipeline(
           _ok(kind: EntryTargetKind.listing, policy: policy),
           supported: const <EntryTargetKind>{EntryTargetKind.listing},
-        ).decide('c', locale: locale);
+        ).decide('c', host: 'entry.example.test', locale: locale);
         expect(d.rejection, EntryRejection.accountWallForGuest,
             reason: 'a guest cannot pass the marketplace account wall');
       }
@@ -179,7 +180,7 @@ void main() {
     test('a guest entry pointing at a bundle is refused', () async {
       final d = await _pipeline(
         _ok(kind: EntryTargetKind.bundle, policy: IdentityPolicy.open),
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.rejection, EntryRejection.accountWallForGuest);
     });
 
@@ -187,14 +188,14 @@ void main() {
       final d = await _pipeline(
         _ok(kind: EntryTargetKind.listing, policy: IdentityPolicy.required),
         supported: const <EntryTargetKind>{EntryTargetKind.listing},
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue);
     });
 
     test('a local server is guest-reachable', () async {
       final d = await _pipeline(
         _ok(kind: EntryTargetKind.localServer, policy: IdentityPolicy.open),
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue,
           reason: 'a sticker on a machine needs no account');
     });
@@ -204,7 +205,7 @@ void main() {
       final d = await _pipeline(
         _ok(kind: EntryTargetKind.localServer),
         supported: const <EntryTargetKind>{EntryTargetKind.server},
-      ).decide('c', locale: locale);
+      ).decide('c', host: 'entry.example.test', locale: locale);
       expect(d.rejection, EntryRejection.unsupportedTarget);
       // Nothing was swapped in: the answer still points where it pointed.
       expect(d.target.target!.kind, EntryTargetKind.localServer);

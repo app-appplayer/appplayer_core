@@ -1,3 +1,52 @@
+## [0.1.27] - 2026-08-26
+
+### Fixed
+- **A scanned server endpoint could be registered but never dialled.**
+  `EntryOpener` wrote the endpoint under `url`, and the streamable-HTTP
+  transport reads `baseUrl` — so every `server` entry, the most common target
+  kind there is, registered cleanly and then refused to connect with
+  `streamableHttp transport requires "baseUrl" string field`.
+
+  It survived because the test that covered the registration asserted the same
+  wrong key and never connected: "connecting fails offline" made a test that
+  could not tell a working registration from a broken one. The assertion now
+  names `baseUrl` and dials a closed loopback port, so the registration is
+  still what is pinned but a wrong key fails there rather than in the field.
+
+### Added
+- **`AppSession.registerIdentityPromotion`** — a host can now wire how a guest
+  becomes an identified viewer and back (platform spec 19 §5.3). The runtime
+  has carried the machinery all along and nothing registered handlers, so
+  `identity.promote` was unsupported on every tier.
+
+  Narrow on purpose: the runtime stays unexposed. Promotion is the host's act
+  — core has no idea who this viewer would be — and a build that registers
+  nothing still reports the action unsupported, which is the honest answer
+  where there is no sign-in.
+
+### Changed
+- **Entry resolution follows the link's host.** `EntryResolverPort.resolve` now
+  takes the claimed host the code arrived on, and `HttpEntryResolver` derives
+  `https://<host>/api/e/<code>` per call instead of holding one configured
+  endpoint. Platform spec 19 §2 puts the resolver on the entry host domain, so
+  the host is which registry a code belongs to.
+
+  A single endpoint beside a **set** of claimed hosts was the shape that let a
+  build claiming two issuers ask the first issuer's resolver about the second
+  issuer's code — answered wrongly rather than refused, and that answer decides
+  what a viewer is shown. `EntryLink` now carries `host` for the same reason:
+  dropping it at parse time is what made the mistake invisible.
+
+  `HttpEntryResolver(endpoint:)` → `HttpEntryResolver(path:)`, defaulting to
+  `/api/e`. One path for every issuer: a host reads all its claimed domains
+  with one controller, so a per-issuer path makes the second unreadable.
+
+- **Dependency floors raised to the versions released alongside this cut** —
+  `flutter_mcp_ui_core ^0.6.5` and `flutter_mcp_ui_runtime ^0.7.7`. A release
+  declares the workspace's current versions rather than the ones its floors
+  happened to name; the previous floors (`^0.6.4` / `^0.7.6`) would have let a
+  consumer resolve this core against the cut it was built beside.
+
 ## [0.1.26] - 2026-08-11
 
 ### Fixed

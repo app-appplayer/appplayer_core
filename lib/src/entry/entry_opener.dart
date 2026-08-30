@@ -135,7 +135,11 @@ class EntryOpener {
               : endpoint,
           description: 'Opened from a scanned link',
           transportType: TransportType.streamableHttp,
-          transportConfig: <String, dynamic>{'url': endpoint},
+          // `baseUrl` is the key the transport factory reads. Anything else
+          // registers a row that looks right in storage and refuses to dial —
+          // and a registration test that never connects cannot tell them
+          // apart, which is how this shipped.
+          transportConfig: <String, dynamic>{'baseUrl': endpoint},
         ),
       );
     }
