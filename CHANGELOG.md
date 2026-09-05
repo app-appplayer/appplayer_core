@@ -1,3 +1,22 @@
+## [0.1.28] - 2026-09-05
+
+### Changed
+- Floors `flutter_mcp_ui_runtime` at `^0.7.8` and `mcp_bundle` at `^0.4.10`.
+
+### Fixed
+- **`ui.text` / `ui.tree` answered nothing once a tab app had a page behind
+  the front one.** The snapshot tools walk the whole render tree, and a tab
+  page kept alive off-stage stays attached with its last size and, after a
+  state update, no defined geometry — its transform came back NaN, one NaN
+  failed the JSON encode, and every text on the screen was lost with it.
+  Before the update the same page leaked its text at off-screen coordinates.
+
+  A node is in the answer only when its rect is finite and touches the
+  capture surface, in `textSnapshot`, `layoutSnapshot` and
+  `resolveElementRect` alike. What is not on screen is not the tool's
+  subject. Measured by konpi on two tab apps after Order → Kitchen and
+  Driver → Trip.
+
 ## [0.1.27] - 2026-08-26
 
 ### Fixed

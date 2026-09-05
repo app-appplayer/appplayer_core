@@ -66,8 +66,7 @@ class DebugSurface {
         area.width.toInt(),
         area.height.toInt(),
       );
-      final byteData =
-          await cropped.toByteData(format: ui.ImageByteFormat.png);
+      final byteData = await cropped.toByteData(format: ui.ImageByteFormat.png);
       return byteData?.buffer.asUint8List();
     } catch (_) {
       return null;
@@ -89,12 +88,11 @@ class DebugSurface {
       if (ro is RenderMetaData) {
         final meta = ro.metaData;
         if (meta is Map<String, dynamic> && ro.hasSize && ro.attached) {
-          final box = ro;
-          final transform = box.getTransformTo(root);
-          final rect = MatrixUtils.transformRect(
-            transform,
-            Offset.zero & box.size,
-          );
+          final rect = _onScreenRect(root, ro);
+          if (rect == null) {
+            ro.visitChildren(visit);
+            return;
+          }
           final entry = <String, dynamic>{
             'type': meta['type']?.toString() ?? '?',
             'rect': <double>[rect.left, rect.top, rect.width, rect.height],
@@ -132,11 +130,8 @@ class DebugSurface {
     void visit(RenderObject ro) {
       if (ro is RenderParagraph && ro.hasSize && ro.attached) {
         final text = ro.text.toPlainText().trim();
-        if (text.isNotEmpty) {
-          final rect = MatrixUtils.transformRect(
-            ro.getTransformTo(root),
-            Offset.zero & ro.size,
-          );
+        final rect = text.isEmpty ? null : _onScreenRect(root, ro);
+        if (rect != null) {
           out.add(<String, dynamic>{
             'type': 'text',
             'text': text,
@@ -206,14 +201,16 @@ class DebugSurface {
         // `wantType == null` = id-only form: skip the type filter so any
         // node whose id/text/label/title equals `wantKey` matches.
         if (wantType == null || type == wantType) {
-          for (final keyField in const <String>['id', 'text', 'label', 'title']) {
+          for (final keyField in const <String>[
+            'id',
+            'text',
+            'label',
+            'title'
+          ]) {
             final v = meta[keyField];
             if (v is String && v == wantKey) {
-              final transform = node.getTransformTo(root);
-              return MatrixUtils.transformRect(
-                transform,
-                Offset.zero & node.size,
-              );
+              final rect = _onScreenRect(root, node);
+              if (rect != null) return rect;
             }
           }
         }
@@ -225,6 +222,27 @@ class DebugSurface {
       hit = _findMetaRect(root, c, wantType, wantKey);
     });
     return hit;
+  }
+
+  /// Where [box] sits in [root]'s coordinates — or null when it is not on
+  /// screen: a rect that is not finite, or one that does not touch the
+  /// capture root's bounds.
+  ///
+  /// The tools read the whole render tree, and a tree holds more than the
+  /// screen shows. A tab page kept alive off-stage is attached, keeps its
+  /// last size, and after a state update has no defined geometry — its
+  /// transform came back NaN, one NaN failed the JSON encode, and every
+  /// text on the screen was lost with it. Before that it merely leaked the
+  /// previous tab's text at off-screen coordinates. What is not on screen
+  /// is not the tool's subject, so it is not in the answer.
+  Rect? _onScreenRect(RenderBox root, RenderBox box) {
+    final rect = MatrixUtils.transformRect(
+      box.getTransformTo(root),
+      Offset.zero & box.size,
+    );
+    if (!rect.isFinite) return null;
+    if (!rect.overlaps(Offset.zero & root.size)) return null;
+    return rect;
   }
 
   RenderBox? _captureRenderBox() {
