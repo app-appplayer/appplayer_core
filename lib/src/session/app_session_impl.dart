@@ -77,9 +77,8 @@ class AppSessionImpl implements AppSession {
 
   bool _closed = false;
 
-  Client? get _client => source == AppSource.server
-      ? _conn.connections[handle.key]?.client
-      : null;
+  Client? get _client =>
+      source == AppSource.server ? _conn.connections[handle.key]?.client : null;
 
   /// System baseline theme — REAL light AND dark token sets. An app that
   /// declares no theme must render on this, not on the runtime's bare
@@ -133,8 +132,9 @@ class AppSessionImpl implements AppSession {
     // Skip only when the singleton state is PROVABLY still ours: same owner
     // (or identical content) AND untouched fingerprint. A destroy/reset
     // anywhere flips the fingerprint, forcing a fresh apply.
-    final intact = (_themeStateOwner == owner || _themeAppliedContent == wanted) &&
-        _themeAppliedFingerprint == tm.fingerprint;
+    final intact =
+        (_themeStateOwner == owner || _themeAppliedContent == wanted) &&
+            _themeAppliedFingerprint == tm.fingerprint;
     if (!intact) {
       if (own != null) {
         tm.setTheme(own);
@@ -164,6 +164,7 @@ class AppSessionImpl implements AppSession {
       onToolCall: _onToolCall,
       onResourceSubscribe: _onResourceSubscribe,
       onResourceUnsubscribe: _onResourceUnsubscribe,
+      onResourceRead: _onResourceRead,
       onExit: onExit,
       hostBrightness: hostBrightness,
     );
@@ -181,6 +182,7 @@ class AppSessionImpl implements AppSession {
       onToolCall: _onToolCall,
       onResourceSubscribe: _onResourceSubscribe,
       onResourceUnsubscribe: _onResourceUnsubscribe,
+      onResourceRead: _onResourceRead,
       onExit: onExit,
       onOpenApp: onOpenApp,
       hostBrightness: hostBrightness,
@@ -214,6 +216,27 @@ class AppSessionImpl implements AppSession {
       uri: uri,
       binding: binding,
       ownerKey: handle.key,
+    );
+  }
+
+  /// `resource read` (spec §4.5): a one-shot read stored at the binding.
+  /// Registered separately from subscribe: without it the runtime borrows
+  /// the subscribe handler for a read, which added a wire subscription per
+  /// read and never wrote the binding.
+  Future<void> _onResourceRead(String uri, String binding) async {
+    final client = _client;
+    if (client == null) {
+      _logger.warn('session.read.no_client', {
+        'handle': handle.toString(),
+        'uri': uri,
+      });
+      return;
+    }
+    await _subs.read(
+      client: client,
+      runtime: _runtime,
+      uri: uri,
+      binding: binding,
     );
   }
 

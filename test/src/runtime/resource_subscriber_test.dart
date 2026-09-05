@@ -23,14 +23,12 @@ void main() {
     when(() => state.set(any(), any())).thenReturn(null);
     when(() => runtime.registerResourceSubscription(any(), any()))
         .thenReturn(null);
-    when(() => runtime.unregisterResourceSubscription(any()))
-        .thenReturn(null);
+    when(() => runtime.unregisterResourceSubscription(any())).thenReturn(null);
   });
 
   group('ResourceSubscriber (MOD-RUNTIME-004)', () {
     test('TC-RES-001: subscribe with binding does everything', () async {
-      when(() => client.subscribeResource('res://x'))
-          .thenAnswer((_) async {});
+      when(() => client.subscribeResource('res://x')).thenAnswer((_) async {});
       when(() => client.readResource('res://x'))
           .thenAnswer((_) async => _result('{"count":3}'));
 
@@ -42,15 +40,68 @@ void main() {
       );
 
       verify(() => client.subscribeResource('res://x')).called(1);
-      verify(() =>
-              runtime.registerResourceSubscription('res://x', 'count'))
+      verify(() => runtime.registerResourceSubscription('res://x', 'count'))
           .called(1);
-      verify(() => state.set('count', 3)).called(1);
+      // The payload lands at the binding as-is, the way a notification's
+      // does — not spread over the root by its top-level keys.
+      verify(() => state.set('count', {'count': 3})).called(1);
+    });
+
+    test('the first read populates the binding a page declared', () async {
+      when(() => client.subscribeResource('line://state'))
+          .thenAnswer((_) async {});
+      when(() => client.readResource('line://state')).thenAnswer(
+          (_) async => _result('{"rows":[{"name":"Walker"}],"heads":4}'));
+
+      await ResourceSubscriber().subscribe(
+        client: client,
+        runtime: runtime,
+        uri: 'line://state',
+        binding: 'live',
+      );
+
+      verify(() => state.set('live', {
+            'rows': [
+              {'name': 'Walker'}
+            ],
+            'heads': 4,
+          })).called(1);
+      verifyNever(() => state.set('rows', any()));
+      verifyNever(() => state.set('heads', any()));
+    });
+
+    test('read stores at the binding and holds no subscription', () async {
+      when(() => client.readResource('line://state'))
+          .thenAnswer((_) async => _result('{"heads":3}'));
+
+      await ResourceSubscriber().read(
+        client: client,
+        runtime: runtime,
+        uri: 'line://state',
+        binding: 'live',
+      );
+
+      verify(() => state.set('live', {'heads': 3})).called(1);
+      verifyNever(() => client.subscribeResource(any()));
+      verifyNever(() => runtime.registerResourceSubscription(any(), any()));
+    });
+
+    test('read failure propagates so the action can report it', () async {
+      when(() => client.readResource('line://state'))
+          .thenThrow(StateError('io'));
+      expect(
+        () => ResourceSubscriber().read(
+          client: client,
+          runtime: runtime,
+          uri: 'line://state',
+          binding: 'live',
+        ),
+        throwsStateError,
+      );
     });
 
     test('TC-RES-002: subscribe without binding skips register', () async {
-      when(() => client.subscribeResource('res://x'))
-          .thenAnswer((_) async {});
+      when(() => client.subscribeResource('res://x')).thenAnswer((_) async {});
       when(() => client.readResource('res://x'))
           .thenAnswer((_) async => _result('{"a":1}'));
 
@@ -59,16 +110,13 @@ void main() {
         runtime: runtime,
         uri: 'res://x',
       );
-      verifyNever(() =>
-          runtime.registerResourceSubscription(any(), any()));
+      verifyNever(() => runtime.registerResourceSubscription(any(), any()));
       verify(() => state.set('a', 1)).called(1);
     });
 
     test('TC-RES-003: initial read failure is swallowed', () async {
-      when(() => client.subscribeResource('res://x'))
-          .thenAnswer((_) async {});
-      when(() => client.readResource('res://x'))
-          .thenThrow(StateError('io'));
+      when(() => client.subscribeResource('res://x')).thenAnswer((_) async {});
+      when(() => client.readResource('res://x')).thenThrow(StateError('io'));
       await ResourceSubscriber().subscribe(
         client: client,
         runtime: runtime,
@@ -99,8 +147,7 @@ void main() {
         uri: 'res://x',
       );
       verify(() => client.unsubscribeResource('res://x')).called(1);
-      verify(() => runtime.unregisterResourceSubscription('res://x'))
-          .called(1);
+      verify(() => runtime.unregisterResourceSubscription('res://x')).called(1);
     });
 
     test('TC-RES-007: unsubscribe failure throws', () async {
@@ -164,6 +211,35 @@ void main() {
       // repair — and would have hidden that the wire call was the gap.
     });
 
+    test('the re-read after a reconnect lands at the surviving binding',
+        () async {
+      final subscriber = ResourceSubscriber();
+      when(() => client.subscribeResource('line://state'))
+          .thenAnswer((_) async {});
+      when(() => client.readResource('line://state'))
+          .thenAnswer((_) async => _result('{"heads":4}'));
+      await subscriber.subscribe(
+        client: client,
+        runtime: runtime,
+        uri: 'line://state',
+        binding: 'live',
+        ownerKey: 'door',
+      );
+
+      final fresh = MockClient();
+      when(() => fresh.subscribeResource('line://state'))
+          .thenAnswer((_) async {});
+      when(() => fresh.readResource('line://state'))
+          .thenAnswer((_) async => _result('{"heads":3}'));
+      when(() => runtime.getBindingForUri('line://state')).thenReturn('live');
+
+      await subscriber.reattach(
+          client: fresh, runtime: runtime, ownerKey: 'door');
+
+      verify(() => state.set('live', {'heads': 3})).called(1);
+      verifyNever(() => state.set('heads', any()));
+    });
+
     test('an owner with nothing subscribed does not touch the wire', () async {
       final fresh = MockClient();
       await ResourceSubscriber().reattach(
@@ -193,8 +269,7 @@ void main() {
       final fresh = MockClient();
       when(() => fresh.subscribeResource('data://a'))
           .thenThrow(StateError('refused'));
-      when(() => fresh.subscribeResource('data://b'))
-          .thenAnswer((_) async {});
+      when(() => fresh.subscribeResource('data://b')).thenAnswer((_) async {});
       when(() => fresh.readResource(any()))
           .thenAnswer((_) async => _result('{"b":2}'));
 

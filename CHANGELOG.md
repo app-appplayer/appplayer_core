@@ -1,3 +1,25 @@
+## [0.1.29] - 2026-09-05
+
+### Changed
+- Floors `flutter_mcp_ui_runtime` at `^0.7.9`.
+
+### Fixed
+- **A page that subscribed to a resource with a `binding` was never
+  populated by its first read — only by the next notification.** The
+  subscription's initial read spread the payload's top-level keys over the
+  root state instead of storing the payload at the binding, while the
+  notification path stores it at the binding as-is (spec §4.5). A page
+  opened before any notification stayed empty; one re-entered later showed
+  the previous notification's content, which read as a stale cache. The
+  initial read and the reconnect re-read now land at the binding the way a
+  notification does. Measured by konpi on `waiting-line`.
+- **`resource read` borrowed the subscribe handler.** The session
+  registered no read handler, so the runtime's fallback used subscribe:
+  every read added a wire subscription and, as above, never wrote the
+  binding. The session now registers a read handler — a one-shot fetch
+  stored at the binding, holding no subscription and propagating failure
+  so the action reports it.
+
 ## [0.1.28] - 2026-09-05
 
 ### Changed

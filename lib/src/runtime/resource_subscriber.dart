@@ -64,24 +64,57 @@ class ResourceSubscriber {
 
     if (binding != null) {
       runtime.registerResourceSubscription(uri, binding);
-      _logger.debug('Registered binding',
-          {'uri': uri, 'binding': binding});
+      _logger.debug('Registered binding', {'uri': uri, 'binding': binding});
     }
 
     // Initial read (FR-RES-003) — failures are logged but not propagated.
     try {
       final resource = await client.readResource(uri);
-      if (resource.contents.isEmpty) return;
-      final text = resource.contents.first.text;
-      if (text == null) return;
-      final decoded = jsonDecode(text);
-      if (decoded is Map<String, dynamic>) {
-        decoded.forEach((key, value) {
-          runtime.stateManager.set(key, value);
-        });
-      }
+      _apply(runtime, binding, resource);
     } catch (e) {
       _logger.warn('Initial resource read failed', {'uri': uri}, e);
+    }
+  }
+
+  /// A one-shot read (spec §4.5 `resource read`): fetch and store at
+  /// [binding]. No subscription, no reference count — a document that reads
+  /// on every page open must not be holding one more wire subscription per
+  /// open. Failures propagate: the action reports them.
+  Future<void> read({
+    required Client client,
+    required MCPUIRuntime runtime,
+    required String uri,
+    required String binding,
+  }) async {
+    _logger.debug('Reading resource', {'uri': uri, 'binding': binding});
+    final resource = await client.readResource(uri);
+    _apply(runtime, binding, resource);
+  }
+
+  /// Stores what a read returned the way a notification does: the decoded
+  /// payload **as-is at the binding** (spec §4.5). It used to spread the
+  /// payload's top-level keys over the root state instead, so `live` — the
+  /// binding a page declared and read — was never written by a read, only by
+  /// the next `notifications/resources/updated`; a page opened before any
+  /// notification stayed empty, and one re-entered later showed the previous
+  /// notification's content. Without a binding the legacy spread stands.
+  void _apply(
+    MCPUIRuntime runtime,
+    String? binding,
+    ReadResourceResult resource,
+  ) {
+    if (resource.contents.isEmpty) return;
+    final text = resource.contents.first.text;
+    if (text == null) return;
+    final decoded = jsonDecode(text);
+    if (binding != null) {
+      runtime.stateManager.set(binding, decoded);
+      return;
+    }
+    if (decoded is Map<String, dynamic>) {
+      decoded.forEach((key, value) {
+        runtime.stateManager.set(key, value);
+      });
     }
   }
 
@@ -126,10 +159,13 @@ class ResourceSubscriber {
           ownerKey: ownerKey,
         );
       } catch (e) {
-        _logger.warn('unsubscribeAllFor: unsubscribe failed', {
-          'uri': uri,
-          'ownerKey': ownerKey,
-        }, e);
+        _logger.warn(
+            'unsubscribeAllFor: unsubscribe failed',
+            {
+              'uri': uri,
+              'ownerKey': ownerKey,
+            },
+            e);
       }
     }
   }
@@ -167,13 +203,9 @@ class ResourceSubscriber {
       }
       try {
         final resource = await client.readResource(uri);
-        if (resource.contents.isEmpty) continue;
-        final text = resource.contents.first.text;
-        if (text == null) continue;
-        final decoded = jsonDecode(text);
-        if (decoded is Map<String, dynamic>) {
-          decoded.forEach(runtime.stateManager.set);
-        }
+        // The binding survived in the runtime; the read lands on it the
+        // same way the initial read did.
+        _apply(runtime, runtime.getBindingForUri(uri), resource);
       } catch (e) {
         _logger.warn('resubscribe initial read failed', {'uri': uri}, e);
       }
@@ -192,6 +224,7 @@ class ResourceSubscriber {
   }
 
   /// Snapshot of active subscription URIs per ownerKey (test helper).
-  Map<String, Set<String>> get activeSubscriptions =>
-      <String, Set<String>>{for (final e in _active.entries) e.key: {...e.value}};
+  Map<String, Set<String>> get activeSubscriptions => <String, Set<String>>{
+        for (final e in _active.entries) e.key: {...e.value}
+      };
 }

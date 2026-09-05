@@ -48,7 +48,8 @@ void main() {
       core = AppPlayerCoreService.forTesting(
         connector: (_) async => server.client,
       );
-      await core.initialize(storage: storage, bundleInstallRoot: '/tmp/core-it-bundles');
+      await core.initialize(
+          storage: storage, bundleInstallRoot: '/tmp/core-it-bundles');
     });
 
     tearDown(() async {
@@ -166,7 +167,8 @@ void main() {
           mimeType: 'application/json',
         ),
       ]);
-      server.withResourceContent('ui://app', minimalAppDefinition(id: 's1-app'));
+      server.withResourceContent(
+          'ui://app', minimalAppDefinition(id: 's1-app'));
       server.withResourceContent('bundle://manifest.json', doc);
 
       final session = await core.openAppFromServer('s1');
@@ -236,8 +238,8 @@ void main() {
       server.withResourceContent('bundle://manifest.json', doc);
 
       final session = await core.openAppFromServer('s1');
-      final runtime = core.runtimeManagerForInternals
-          .getOrCreateRuntime(session.handle);
+      final runtime =
+          core.runtimeManagerForInternals.getOrCreateRuntime(session.handle);
       final definition = runtime.getUIDefinition()!;
       final src = ((definition['splash'] as Map)['image'] as String);
 
@@ -247,7 +249,8 @@ void main() {
       expect(src, contains(pixel));
     });
 
-    test('IT-008: MCP Serving 1.0 — server without a bundle document is unaffected',
+    test(
+        'IT-008: MCP Serving 1.0 — server without a bundle document is unaffected',
         () async {
       // The default setUp server serves only ui://app (an existing server).
       final session = await core.openAppFromServer('s1');
@@ -255,7 +258,8 @@ void main() {
       expect(core.servedResources, isNot(contains('bundle://manifest.json')));
     });
 
-    test('IT-003: tool dispatch returns parsed JSON response (fold is runtime responsibility)',
+    test(
+        'IT-003: tool dispatch returns parsed JSON response (fold is runtime responsibility)',
         () async {
       await core.openAppFromServer('s1');
       final result = await core.toolDispatcherForInternals.call(
@@ -281,7 +285,12 @@ void main() {
       );
 
       verify(() => server.client.subscribeResource('res://live')).called(1);
-      expect(runtime.stateManager.get<int>('temperature'), 42);
+      // The payload lands at the binding as-is, the way a notification's
+      // does. This used to pass by coincidence — the spread of the payload's
+      // top-level keys wrote `temperature` because the payload happened to
+      // carry a key of that name, while a page bound to `live` got nothing.
+      expect(runtime.stateManager.get<Map<String, dynamic>>('temperature'),
+          {'temperature': 42});
     });
 
     test('IT-005: UC-006 — tenant denies openAppFromServer outside allowlist',
@@ -315,8 +324,7 @@ void main() {
       expect(session.source, AppSource.server);
     });
 
-    test('IT-006: dispose releases all connections and runtimes',
-        () async {
+    test('IT-006: dispose releases all connections and runtimes', () async {
       await core.openAppFromServer('s1');
       expect(core.connections, isNotEmpty);
 
