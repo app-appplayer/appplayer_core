@@ -1,11 +1,8 @@
 import 'package:appplayer_core/internals.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// JsToolRuntime — non-spawning surface tests are safe under
-/// flutter_tester. The spawning path requires a flutter_js isolate
-/// handshake that does not complete in the unit-test sandbox; the
-/// production path (macOS / iOS / Android real run) is covered by
-/// AppPlayer real-run verification.
+/// JsToolRuntime — the non-spawning surface, and the real worker isolate on
+/// this host's engine.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -74,10 +71,12 @@ void main() {
     });
   });
 
+  // Runs the real worker isolate. It was skipped as "the handshake does not
+  // complete under flutter_tester"; the cause was the worker receiving its
+  // reply port only from `attachHostBridge`, so a bridge-less evaluate never
+  // answered. With the port handed over at spawn it runs here.
   group(
     'JsToolRuntime — production isolate path',
-    skip: 'flutter_js isolate handshake does not complete under '
-        'flutter_tester. Production path covered by AppPlayer real-run verification.',
     () {
       test('evaluates a synchronous expression', () async {
         final rt = JsToolRuntime();

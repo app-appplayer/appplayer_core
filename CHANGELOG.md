@@ -1,3 +1,39 @@
+## [0.1.30] - 2026-09-14
+
+### Changed
+- Floors `flutter_mcp_ui_runtime` at `^0.7.12`.
+
+### Added
+- js tools get `host.kb` — `get`, `put`, `list(prefix?)`, `delete`, `query` —
+  with the reference host's return shapes (`{ok: true}`, `[{key, value}]`,
+  `{removed: bool}`), isolated per bundle. Hosts pass a `DomainStorage` to
+  `initialize(domainStorage:)`; `JsonFileDomainStorage` is re-exported for
+  native hosts. A host that passes none does not offer `host.kb`, and
+  `query` is refused by name where no knowledge engine runs. Uninstalling a
+  bundle clears its state.
+- A bundle's `kind: cloud` and `kind: mcp` tools run (bundle spec §4.5,
+  §4.6), so a js tool that calls them through `host.mcp.callTool` works here
+  as it does on the cloud runner. `cloud` POSTs the input as JSON to an https
+  URL and answers the JSON body; a non-2xx status or a non-JSON body fails
+  with the reason. `mcp` calls the remote tool over streamable HTTP, one
+  connection per call; `stdio` is refused with the reason.
+
+### Fixed
+- An `evaluate` or `evaluateAsync` on a js runtime with no host bridge
+  attached never completed: the worker received its reply channel only when
+  a bridge was attached, so the reply went nowhere. Bundles always attach a
+  bridge first and did not hit it; any other caller waited forever. The
+  channel is now handed to the worker when it is spawned.
+- A js tool that returned an object or an array reached the caller as text,
+  not as the value, on Android, Windows and Linux — every field binding on
+  the result read null. flutter_js settles a Promise into the Dart
+  `toString()` of the value on QuickJS (`{count: 2}`), and into
+  `JSON.stringify` on JavaScriptCore. The worker now serializes the value in
+  JS and reads the text back synchronously, so every engine answers the same
+  JSON; a rejection is an error on every engine, and a value JSON cannot
+  represent is an error. A result that is not JSON is now reported as a
+  defect instead of being handed on as a string.
+
 ## [0.1.29] - 2026-09-05
 
 ### Changed

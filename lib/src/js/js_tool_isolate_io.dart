@@ -79,9 +79,13 @@ class JsToolIsolate {
   /// [attachHostBridge].
   static Future<JsToolIsolate> spawn() async {
     final initPort = ReceivePort();
+    // The worker's reply channel exists before the worker does. It used to be
+    // handed over only by `attachHostBridge`, so an evaluate on a runtime with
+    // no bridge attached sent its reply to nobody and never completed.
+    final eventPort = ReceivePort();
     final isolate = await Isolate.spawn(
       _workerEntry,
-      initPort.sendPort,
+      <SendPort>[initPort.sendPort, eventPort.sendPort],
       errorsAreFatal: false,
     );
     final stream = initPort.asBroadcastStream();
@@ -92,7 +96,6 @@ class JsToolIsolate {
       throw StateError('JsToolIsolate worker did not signal ready');
     }
     final cmdPort = first[#cmd] as SendPort;
-    final eventPort = ReceivePort();
     final replies = <int, Completer<JsIsolateEvalResult>>{};
     final dispatcherRef = <HostAtomDispatcher?>[null];
     final sub = eventPort.listen((dynamic raw) {
@@ -237,7 +240,54 @@ class JsToolIsolate {
 
 
 
-void _workerEntry(SendPort initPort) {
+/// Resolves [code] — an expression yielding a value or a Promise — and answers
+/// the JSON text of the resolved value, identical on every engine.
+///
+/// flutter_js settles a Promise differently per engine: JavaScriptCore hands
+/// back `JSON.stringify(value)`, QuickJS (Android, Windows, Linux) hands back
+/// the Dart `toString()` of the value it converted — `{count: 2}` for an
+/// object, which is not JSON — and both report a rejection by throwing. So the
+/// outcome is decided in JS: the value is serialized (or the rejection's
+/// message taken), parked in a per-call slot, and read back with a synchronous
+/// evaluate once the Promise has settled. A string read synchronously comes
+/// back as itself on both engines. A value JSON cannot represent is an error.
+Future<fjs.JsEvalResult> settleAsJson(
+  fjs.JavascriptRuntime rt,
+  String code,
+  int id, {
+  String? sourceUrl,
+}) async {
+  final slot = 'globalThis.__mmSettled[$id]';
+  const message = 'String((e && e.message) || e)';
+  final pending = await rt.evaluateAsync(
+    '(globalThis.__mmSettled = globalThis.__mmSettled || {}, '
+    'Promise.resolve().then(function () { return ($code); })'
+    '.then(function (v) { '
+    'var s = JSON.stringify(v === undefined ? null : v); '
+    '$slot = "ok:" + (s === undefined ? "null" : s); })'
+    '.then(null, function (e) { $slot = "err:" + $message; })'
+    '.then(function () { return 0; }))',
+    sourceUrl: sourceUrl,
+  );
+  await rt.handlePromise(pending);
+  final read = rt.evaluate(
+    '(function () { var s = $slot; delete $slot; return s; })()',
+  );
+  final text = read.stringResult;
+  if (read.isError || !(text.startsWith('ok:') || text.startsWith('err:'))) {
+    return fjs.JsEvalResult(
+      'settle produced no outcome: $text',
+      null,
+      isError: true,
+    );
+  }
+  return text.startsWith('ok:')
+      ? fjs.JsEvalResult(text.substring(3), null)
+      : fjs.JsEvalResult(text.substring(4), null, isError: true);
+}
+
+void _workerEntry(List<SendPort> ports) {
+  final initPort = ports[0];
   // Spin up runtime — no xhr binding so the worker doesn't try to
   // touch Flutter's ServicesBinding (which is not initialised in a
   // background isolate).
@@ -245,7 +295,7 @@ void _workerEntry(SendPort initPort) {
   rt.enableHandlePromises();
   final cmd = ReceivePort();
   initPort.send(<Symbol, dynamic>{#kind: _K.ready, #cmd: cmd.sendPort});
-  SendPort? eventPort;
+  SendPort? eventPort = ports[1];
   final shutdown = Completer<void>();
   // Event-driven dispatch — using `cmd.listen` (not `await for`) so
   // we can process `hostResolve` / `hostReject` messages WHILE an
@@ -282,11 +332,12 @@ void _workerEntry(SendPort initPort) {
     } else if (kind == _K.evaluateAsync) {
       final replyId = raw[#replyId] as int;
       try {
-        final pending = await rt.evaluateAsync(
+        final settled = await settleAsJson(
+          rt,
           raw[#code] as String,
+          replyId,
           sourceUrl: raw[#sourceUrl] as String?,
         );
-        final settled = await rt.handlePromise(pending);
         eventPort?.send(<Symbol, dynamic>{
           #kind: _K.evaluateResult,
           #replyId: replyId,

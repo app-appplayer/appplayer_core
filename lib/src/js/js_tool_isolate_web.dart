@@ -268,10 +268,14 @@ self.onmessage = function(event) {
       reply(String((e && e.message) || e), true);
       return;
     }
-    if (msg.kind === 'evaluateAsync' && value && typeof value.then === 'function') {
-      value.then(
-        function(v) { reply(self.__stringify(v), false); },
-        function(e) { reply(String((e && e.message) || e), true); }
+    // evaluateAsync answers the JSON text of the resolved value — the same
+    // contract the native worker keeps — so a tool's result reads the same
+    // on every engine. Sync evaluate keeps its plain string form.
+    var fail = function(e) { reply(String((e && e.message) || e), true); };
+    if (msg.kind === 'evaluateAsync') {
+      Promise.resolve(value).then(
+        function(v) { try { reply(self.__json(v), false); } catch (e) { fail(e); } },
+        fail
       );
     } else {
       reply(self.__stringify(value), false);
@@ -288,6 +292,11 @@ self.onmessage = function(event) {
     if (self.__hostReject) self.__hostReject(msg.uuid, msg.message);
     return;
   }
+};
+
+self.__json = function(v) {
+  var s = JSON.stringify(v === undefined ? null : v);
+  return s === undefined ? 'null' : s;
 };
 
 self.__stringify = function(v) {

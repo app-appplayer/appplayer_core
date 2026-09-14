@@ -18,6 +18,7 @@ import 'package:brain_kernel/brain_kernel.dart'
     show
         BundleSessionBridge,
         DispatchSession,
+        DomainStorage,
         InMemoryKvStoragePort,
         KernelApp,
         KernelClientConnection,
@@ -28,11 +29,14 @@ import 'package:brain_kernel/brain_kernel.dart'
 // outside the main barrel.
 import 'package:brain_kernel/mcp_host.dart'
     show ExtensionTransportConnect, McpClientKernelHost, connectExtension;
-import 'package:mcp_client/mcp_client.dart' show Client, ClientTransport;
+import 'package:mcp_client/mcp_client.dart'
+    show Client, ClientTransport, McpClient, TransportConfig;
 import '../bundle/bundle_application_adapter.dart';
 import '../js/atom_category.dart';
 import '../js/atoms/agent_atom.dart';
+import '../bundle/bundle_tool_handlers.dart';
 import '../js/atoms/bundle_atom.dart';
+import '../js/atoms/kb_atom.dart';
 import '../js/atoms/mcp_atom.dart';
 import '../js/js_tool_runtime.dart';
 import '../settings/settings_store.dart';
@@ -93,7 +97,9 @@ import '../tenant/tenant_source.dart';
 /// so `close()` can tear down the isolate + unregister dispatcher entries.
 class _JsToolWireState {
   _JsToolWireState({required this.runtime, required this.toolNames});
-  final JsToolRuntime runtime;
+  // Null when the bundle declares no js tools — its cloud / mcp tools still
+  // register, and still unregister with the session.
+  final JsToolRuntime? runtime;
   final List<String> toolNames;
 }
 
@@ -133,6 +139,10 @@ class AppPlayerCoreService {
   late final Logger _logger;
   late final MetricsPort _metrics;
   late final CredentialVault _credentialVault;
+
+  /// Durable per-bundle state behind the js `kb` atom. Null when the host
+  /// wired none — then `host.kb` is not offered at all.
+  DomainStorage? _domainStorage;
   late final BundleLoaderAdapter _bundleLoader;
   late final BundleResolver _bundleResolver;
   late final BundleApplicationAdapter _bundleAdapter;
@@ -542,6 +552,10 @@ class AppPlayerCoreService {
     ConsentPrompt? consentPrompt,
     ConsentStore? consentStore,
     MemoryReclaimer? memoryReclaimer,
+    // Durable per-bundle state for the js `kb` atom (bundle spec §4.8.1).
+    // Native hosts pass a [JsonFileDomainStorage]; a host that passes none
+    // does not offer `host.kb`.
+    DomainStorage? domainStorage,
     // Debug MCP (FR-DEBUG) — a desktop-only, settings-gated MCP endpoint
     // for test automation (screenshot / tree / tap / type). The desktop
     // gate is enforced here in core, so hosts may pass the raw user pref.
@@ -557,6 +571,7 @@ class AppPlayerCoreService {
     _credentialVault = credentialVault ?? const NoopCredentialVault();
     _storage = storage;
     _bundleInstallRoot = bundleInstallRoot;
+    _domainStorage = domainStorage;
     _conn = ConnectionManager(logger: _logger, connector: _testConnector);
     // UI DSL §6.13 — the platform powers this host can actually perform. A
     // tier that wires none is still conformant: every affected widget reports
@@ -1311,9 +1326,25 @@ class AppPlayerCoreService {
       mimeType: 'application/json',
     );
 
-    // JS tools (`tools[].kind=js`) run in-process on the host — for a served
-    // bundle too (script tools are host-side per the serving contract).
+    // The bundle's own tools run in-process on the host — js scripts, and the
+    // cloud endpoints and MCP servers it declares — for a served bundle too
+    // (script tools are host-side per the serving contract).
     return _wireJsTools(bundle, bundleId);
+  }
+
+  /// Connects to the MCP server a bundle's `kind: mcp` tool names — the same
+  /// connect the core uses for any server.
+  static Future<Client> _connectBundleMcpServer(
+    TransportConfig transport,
+  ) async {
+    final result = await McpClient.createAndConnect(
+      config: McpClient.simpleConfig(name: 'AppPlayer bundle tool', version: '1.0.0'),
+      transportConfig: transport,
+    );
+    if (result.isFailure) {
+      throw StateError('Failed to connect: ${result.failureOrNull}');
+    }
+    return result.get();
   }
 
   Future<_JsToolWireState?> _wireJsTools(
@@ -1321,8 +1352,31 @@ class AppPlayerCoreService {
     String bundleId,
   ) async {
     final tools = bundle.tools?.tools ?? const [];
+    // cloud / mcp first: they need no runtime, and a js tool that reaches them
+    // through `host.mcp.callTool` must find them registered. The cloud runner
+    // runs both kinds; a bundle whose js calls one must not work there and
+    // fail here.
+    final registered = <String>[];
+    for (final t in tools) {
+      final InProcessToolHandler handler;
+      switch (t.kind) {
+        case ToolKind.cloud:
+          handler = cloudToolHandler(t.name, t.target);
+        case ToolKind.mcp:
+          handler = mcpToolHandler(t.name, t.target,
+              connect: _testConnector ?? _connectBundleMcpServer);
+        default:
+          continue;
+      }
+      _toolDispatcher.registerInProcessTool(t.name, handler);
+      registered.add(t.name);
+    }
     final jsEntries = tools.where((t) => t.kind == ToolKind.js).toList();
-    if (jsEntries.isEmpty) return null;
+    if (jsEntries.isEmpty) {
+      return registered.isEmpty
+          ? null
+          : _JsToolWireState(runtime: null, toolNames: registered);
+    }
     // Read the entry scripts through the bundle's own file surface. A
     // path would restrict JS tools to hosts that can resolve one, and
     // the bundle already knows where its files are.
@@ -1332,7 +1386,9 @@ class AppPlayerCoreService {
         'JS tools declared but bundle carries no files — skip',
         {'bundleId': bundleId},
       );
-      return null;
+      return registered.isEmpty
+          ? null
+          : _JsToolWireState(runtime: null, toolNames: registered);
     }
 
     final runtime = JsToolRuntime();
@@ -1342,6 +1398,12 @@ class AppPlayerCoreService {
       if (_kernel != null)
         AgentAtom(_kernel!, bridge: _bridge, session: session),
       BundleAtom(bundle: bundle),
+      if (_domainStorage != null)
+        KbAtom(
+          storage: _domainStorage!,
+          namespace: bundle.manifest.id,
+          engine: _kernel?.queryEngine,
+        ),
     ];
     // When the manifest declares `requires.builtinAtoms`, expose only
     // that set. Otherwise expose every atom the core provides. Host
@@ -1356,10 +1418,11 @@ class AppPlayerCoreService {
     } catch (e) {
       _logger.warn('attachHostBridge failed', {'bundleId': bundleId}, e);
       await runtime.dispose();
-      return null;
+      return registered.isEmpty
+          ? null
+          : _JsToolWireState(runtime: null, toolNames: registered);
     }
 
-    final registered = <String>[];
     for (final t in jsEntries) {
       final entry = t.target['entry'];
       final fn = t.target['fn'];
@@ -1407,10 +1470,15 @@ class AppPlayerCoreService {
         if (r.isError) {
           throw Exception('JS tool $toolName failed: ${r.stringResult}');
         }
+        // The runtime answers the JSON text of the resolved value on every
+        // engine. Text that is not JSON is a runtime defect, surfaced as one —
+        // handing it on as a string turned an object result into a value no
+        // binding could read.
         try {
           return jsonDecode(r.stringResult);
-        } catch (_) {
-          return r.stringResult;
+        } on FormatException {
+          throw StateError('JS tool $toolName returned a result that is not '
+              'JSON: ${r.stringResult}');
         }
       });
       registered.add(toolName);
@@ -1518,6 +1586,9 @@ class AppPlayerCoreService {
   Future<void> uninstallBundle(String bundleId) async {
     _assertReady();
     await _bundleInstaller.uninstall(bundleId);
+    // A reinstall starts clean: state the removed bundle kept in `host.kb`
+    // must not surface in whatever installs under the same id next.
+    await _domainStorage?.clearNamespace(bundleId);
     await _invalidateBundleCaches(bundleId);
   }
 
