@@ -28,6 +28,7 @@ void main() {
       async function nothingTool() { }
       async function failingTool() { throw new Error("boom"); }
       function syncObjectTool() { return {sync: true}; }
+      function syncFailingTool() { throw new Error("sync boom"); }
       async function cyclicTool() { var o = {}; o.self = o; return o; }
     ''');
   });
@@ -45,7 +46,11 @@ void main() {
   });
 
   test('an array comes back as the array', () async {
-    expect(await run('arrayTool()'), [1, 'two', {'three': 3}]);
+    expect(await run('arrayTool()'), [
+      1,
+      'two',
+      {'three': 3}
+    ]);
   });
 
   test('a string is a JSON string, not double-encoded', () async {
@@ -65,6 +70,36 @@ void main() {
     final r = await settleAsJson(rt, 'failingTool()', id++);
     expect(r.isError, isTrue);
     expect(r.stringResult, contains('boom'));
+    final s = await settleAsJson(rt, 'syncFailingTool()', id++);
+    expect(s.isError, isTrue);
+    expect(s.stringResult, contains('sync boom'));
+  });
+
+  test('an expression written as a statement with a trailing ; settles',
+      () async {
+    final r = await settleAsJson(
+        rt,
+        '''
+      objectTool({n: 5})
+        .then(function (v) { return {ok: true, count: v.count}; })
+        .catch(function (e) { return {ok: false}; });
+    ''',
+        id++);
+    expect(r.isError, isFalse, reason: r.stringResult);
+    expect(jsonDecode(r.stringResult), {'ok': true, 'count': 5});
+  });
+
+  test('an expression ending in a // comment settles', () async {
+    expect(await run('objectTool({n: 7}) // the last line is a comment'),
+        {'count': 7, 'at': '09:03'});
+  });
+
+  test('code that is not an expression is an error with the engine message',
+      () async {
+    final r = await settleAsJson(rt, 'var x = 1; x', id++);
+    expect(r.isError, isTrue);
+    expect(r.stringResult, isNot(contains('settle produced no outcome')));
+    expect(r.stringResult, isNotEmpty);
   });
 
   test('a value JSON cannot represent is an error', () async {

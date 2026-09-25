@@ -203,6 +203,7 @@ class ConnectionHealthMonitor {
 
     final attempts = _reconnectAttempts[serverId] ?? 0;
     final engaged = isEngaged?.call(serverId) ?? false;
+    final paced = engaged && !info.awaitsReachability;
     final max = _config.maxReconnectAttempts;
     if (max > 0 && attempts >= max && !engaged) {
       if (_exhausted.add(serverId)) {
@@ -218,7 +219,7 @@ class ConnectionHealthMonitor {
     _pending.add(serverId);
     unawaited(_reconnectAfterBackoff(
       serverId,
-      backoffFor(attempts, engaged: engaged),
+      backoffFor(attempts, engaged: paced),
       attempts + 1,
       _generation,
     ));
@@ -273,6 +274,10 @@ class ConnectionHealthMonitor {
 
         // Hand back to the sweep unless the app is still open on this server…
         if (!(isEngaged?.call(serverId) ?? false)) return;
+        // …and the failure is not one that already knows the endpoint is gone.
+        // Those wait out the idle backoff; the signal that it is back comes
+        // through retryNow (FR-HEALTH-011).
+        if (_conn.getConnection(serverId)?.awaitsReachability ?? false) return;
         // …and the server is still one we hold a connection entry for. Without
         // this the loop would keep dialling a serverId that was disconnected or
         // removed, which can only ever fail.

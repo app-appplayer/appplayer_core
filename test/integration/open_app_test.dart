@@ -17,6 +17,7 @@ ServerConfig _server(String id) => ServerConfig(
     );
 
 void main() {
+  openConnectTimeoutTests();
   setUpAll(() {
     registerFallbackValue(TransportConfig.stdio(command: 'dart'));
     registerFallbackValue(<String, dynamic>{});
@@ -132,10 +133,14 @@ void main() {
     test('IT-002: UC-002 — second openAppFromServer reuses connection',
         () async {
       await core.openAppFromServer('s1');
-      await core.openAppFromServer('s1');
-
       verify(() => server.client.listResources()).called(1);
-      verify(() => server.client.onNotification(any(), any())).called(1);
+      clearInteractions(server.client);
+
+      // The second open reuses the connection: nothing new is asked of the
+      // server and no handler is registered again.
+      await core.openAppFromServer('s1');
+      verifyNever(() => server.client.listResources());
+      verifyNever(() => server.client.onNotification(any(), any()));
     });
 
     test(
@@ -345,4 +350,81 @@ class _FakeTenantSource implements TenantSource {
 
   @override
   Future<TenantContext?> resolve(String appCode) async => _map[appCode];
+}
+
+/// A time limit does not stop waiting — it **closes the connect** (IT-OPEN-TIMEOUT).
+///
+/// A `Future.timeout` put around it from outside is not enough: only the wait
+/// is abandoned, the connect survives and keeps dialling after the caller has
+/// moved to the next candidate, shaking state behind it (measured on a phone
+/// 2026-09-21: the next candidate's open never finished). So the core takes the limit and cleans up itself.
+void openConnectTimeoutTests() {
+  group('Integration: openAppFromServer connectWithin', () {
+    late InMemoryServerStorage storage;
+    late AppPlayerCoreService core;
+
+    setUp(() async {
+      storage = InMemoryServerStorage();
+      await storage.saveServer(ServerConfig(
+        id: 'slow',
+        name: 'Slow',
+        description: '',
+        transportType: TransportType.stdio,
+        transportConfig: const {'command': 'dart'},
+      ));
+    });
+
+    tearDown(() async => core.dispose());
+
+    test('IT-OPEN-TIMEOUT-001 — past the limit, the connect is closed and ConnectionTimeout answers',
+        () async {
+      var connectorCalls = 0;
+      core = AppPlayerCoreService.forTesting(
+        // A peer that never answers: without a limit this waits forever.
+        connector: (_) async {
+          connectorCalls++;
+          await Future<void>.delayed(const Duration(seconds: 30));
+          throw StateError('with a limit in place this is never reached');
+        },
+      );
+      await core.initialize(
+          storage: storage, bundleInstallRoot: '/tmp/core-it-bundles');
+
+      await expectLater(
+        core.openAppFromServer('slow',
+            connectWithin: const Duration(milliseconds: 120)),
+        throwsA(isA<ConnectionTimeoutException>()),
+      );
+      expect(connectorCalls, 1);
+      // Being closed is the point: a connection left alive and dialling behind
+      // would disturb the next candidate's open.
+      expect(core.connections['slow']?.state, isNot(ConnectionState.connected));
+    });
+
+    test('IT-OPEN-TIMEOUT-002 — an answer within the limit opens as usual', () async {
+      final server = MockMcpServer();
+      server.withResources([
+        Resource(
+          uri: 'ui://app',
+          name: 'App',
+          description: '',
+          mimeType: 'application/json',
+        ),
+      ]);
+      server.withResourceContent(
+          'ui://app', minimalAppDefinition(id: 'slow-app'));
+      core = AppPlayerCoreService.forTesting(
+        connector: (_) async {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          return server.client;
+        },
+      );
+      await core.initialize(
+          storage: storage, bundleInstallRoot: '/tmp/core-it-bundles');
+
+      final session = await core.openAppFromServer('slow',
+          connectWithin: const Duration(seconds: 5));
+      expect(session.handle, const AppHandle.server('slow'));
+    });
+  });
 }

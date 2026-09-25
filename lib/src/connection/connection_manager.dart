@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState, Logger;
 
 import '../logging/logger.dart';
 import '../model/server_config.dart';
+import 'awaits_reachability.dart';
 import 'connection_info.dart';
 import 'connection_result.dart';
 import 'connection_state.dart';
+import 'shared_client.dart';
 import 'transport_factory.dart';
 
 /// Abstraction over `McpClient.createAndConnect` to allow injection in tests.
@@ -127,8 +131,10 @@ class ConnectionManager extends ChangeNotifier {
 
     try {
       final transport = _transportFactory.create(server);
-      final client = await _connector(transport);
-
+      // One connection, many consumers: this host's screens and whoever it
+      // lends the connection to. Whatever the connector built is shared through
+      // one layer, so the device does not feel them (23 §6.1).
+      final client = SharedClient(await _connector(transport), _sharingFor(server));
       info.client = client;
       info.state = ConnectionState.connected;
       info.connectedAt = DateTime.now();
@@ -139,9 +145,13 @@ class ConnectionManager extends ChangeNotifier {
       // on a link that is gone) instead of dialing again. React by dropping
       // the entry so hasConnection()/isServerConnected() tell the truth and the
       // next connect() starts fresh.
-      info.disconnectSub = client.onDisconnect.listen(
-        (reason) => _handleTransportDrop(server.id, reason),
-      );
+      info.disconnectSub = client.onDisconnect.listen((reason) {
+        // Only this client's own death drops the entry. A late event from a
+        // client that has already been replaced must not take down the
+        // healthy one that replaced it.
+        if (!identical(_connections[server.id]?.client, client)) return;
+        _handleTransportDrop(server.id, reason);
+      });
       notifyListeners();
       // After the entry is live, so a re-attach can resolve the connection it
       // is re-attaching to.
@@ -176,6 +186,7 @@ class ConnectionManager extends ChangeNotifier {
       }
       info.state = ConnectionState.error;
       info.error = e.toString();
+      info.awaitsReachability = e is AwaitsReachability;
       notifyListeners();
       _logger.logError('Connect failed', e, st, {'serverId': server.id});
       return ConnectionResult.failure(e.toString());
@@ -222,7 +233,26 @@ class ConnectionManager extends ChangeNotifier {
     if (info == null) return;
     info.disconnectSub?.cancel();
     info.disconnectSub = null;
+    // Close the dead client before letting go of it. Dropping only the
+    // reference leaves its socket open: the peer has already closed its side,
+    // so the socket sits in CLOSE_WAIT for the life of the process, and the
+    // reconnect that follows cannot close it either — `disconnect` finds no
+    // client to close. Every keepalive miss leaked one. Measured 2026-09-16
+    // against an ESP32 node: 36 sockets in CLOSE_WAIT within minutes, which
+    // filled the board's own socket table until it reset new connections —
+    // and each reset was another miss, so the leak fed itself.
+    //
+    // The listener is already cancelled above, so closing here cannot re-enter
+    // this handler. Closing is best effort: a client that throws on the way
+    // out must not stop the entry from being marked for reconnect.
+    final dead = info.client;
     info.client = null;
+    try {
+      dead?.disconnect();
+    } catch (e, st) {
+      _logger.logError('Closing a dropped client failed', e, st,
+          {'serverId': serverId});
+    }
     info.state = ConnectionState.error;
     info.error = 'transport dropped: $reason';
     _logger.info('Transport dropped — marked for reconnect',
@@ -232,7 +262,8 @@ class ConnectionManager extends ChangeNotifier {
 
   /// Active keepalive + liveness for transient stream transports (ble:// /
   /// tcp:// / serial:// carried on a streamableHttp config). Sends a cheap
-  /// `listResources` round-trip on every such CONNECTED link:
+  /// `ping` round-trip on every such CONNECTED link (any reply counts, see the
+  /// probe below):
   ///   - the traffic keeps the link warm — an idle BLE session to an ESP32
   ///     drops in ~15s, but ~2-3s keepalive traffic stretches it to ~45s
   ///     (measured), so far fewer reconnect cycles;
@@ -243,21 +274,201 @@ class ConnectionManager extends ChangeNotifier {
   /// periodic poll would just be noise.
   Future<void> keepAliveSweep({
     Duration timeout = const Duration(seconds: 4),
+    Duration dropAfterSilence = _silenceToDrop,
   }) async {
-    final targets = _connections.entries
-        .where((e) =>
-            e.value.state == ConnectionState.connected &&
-            e.value.client != null &&
-            _isTransientStream(e.value.serverConfig))
-        .toList();
-    for (final e in targets) {
-      final client = e.value.client!;
-      try {
-        await client.listResources().timeout(timeout);
-      } catch (_) {
-        _handleTransportDrop(e.key, DisconnectReason.transportError);
+    // One sweep at a time. The health monitor fires on a timer and does not
+    // wait for the previous tick, so a slow probe let sweeps pile up; when they
+    // expired together each dropped the link again — the same connection was
+    // logged as dropped three times in one second, over and over, on an ESP32
+    // node that was answering.
+    if (_sweeping) return;
+    _sweeping = true;
+    try {
+      final targets = _connections.entries
+          .where((e) =>
+              e.value.state == ConnectionState.connected &&
+              e.value.client != null &&
+              _isTransientStream(e.value.serverConfig))
+          .toList();
+      for (final e in targets) {
+        final serverId = e.key;
+        final client = e.value.client!;
+        // Anything the device sent is proof of life (23 §6.1.2). A link that
+        // is streaming does not need a probe, and a probe on a busy single-task
+        // device only queues behind the traffic that already answers the
+        // question. Measured 2026-09-21: an ESP32 pushing an update every
+        // second was dropped 23 times because its ping answers came late, and
+        // every drop stopped the stream on all seven devices sharing it.
+        final probeFrom = DateTime.now();
+        final last = client is SharedClient ? client.lastMessageAt : null;
+        if (last != null && probeFrom.difference(last) < timeout) {
+          continue;
+        }
+        final limit = _probeLimit(serverId, timeout);
+        final watch = Stopwatch()..start();
+        // The probe is `ping`, and any answer is life — a result, or a JSON-RPC
+        // error reply (it carries a code), which a device that never
+        // implemented ping still sends. Only a timeout or a failure with no
+        // reply behind it counts against the link.
+        //
+        // It used to be `resources/list`, every two seconds. On a small board
+        // that serialises its whole resource list per call and serves one
+        // request at a time, that was load the check itself added: measured
+        // under two clients, list answers drifted to 1.2–2.6 s and sometimes
+        // past the limit twice in a row, while the same board answered a ping
+        // it does not even implement in 0.2 s.
+        //
+        // A client may throw on the call itself rather than fail its future;
+        // both are the same attempt.
+        Future<void> probe;
+        try {
+          probe = client.ping().then<void>((_) {}, onError: (Object e) {
+            if (e is McpError && e.code != null) return; // it answered
+            throw e;
+          });
+        } catch (e) {
+          probe = Future<void>.error(e);
+        }
+        // Whether a missed probe was a lost answer or a late one decides the
+        // fix — a longer wait, or a look elsewhere — so keep watching the
+        // original request after giving up on it and say when, if ever, it came.
+        unawaited(probe.then((_) {
+          _recordProbe(serverId, watch.elapsed);
+          if (watch.elapsed > limit) {
+            // A late answer is still an answer: the device is alive, only slow.
+            // Counting the miss anyway dropped an ESP32 that had answered both
+            // of its "missed" probes — at 7.9 s and 4.4 s — one tick before the
+            // second timeout was judged.
+            _logger.info('Keepalive answer arrived late', {
+              'serverId': serverId,
+              'afterMs': watch.elapsedMilliseconds,
+            });
+          } else if (watch.elapsedMilliseconds > 1000) {
+            _logger.info('Keepalive answer slow', {
+              'serverId': serverId,
+              'afterMs': watch.elapsedMilliseconds,
+            });
+          }
+        }, onError: (Object _) {}));
+        try {
+          await probe.timeout(limit);
+        } catch (error) {
+          // Judge the client that was probed, not whatever holds the id now:
+          // by the time a probe times out the link may already have been
+          // replaced, and dropping the replacement starts the cycle again.
+          if (!identical(_connections[serverId]?.client, client)) {
+            _logger.info('Keepalive miss on a replaced client — ignored', {
+              'serverId': serverId,
+              'afterMs': watch.elapsedMilliseconds,
+            });
+            continue;
+          }
+          // A timeout says "slow or dead" and cannot tell which; one slow
+          // answer is not a dead link. Measured on an ESP32 node under two
+          // clients' load: keepalive answers drifted to 1.2–2.6 s, one crossed
+          // the 4 s line, and dropping on that single miss cut a board that
+          // answered the next probe normally — failing the press in flight.
+          // A request that *errors* is different: the link refused it, so that
+          // still drops at once.
+          // Late is not dead: if anything arrived while the probe waited, the
+          // link is alive and only this answer is slow (23 §6.1.2).
+          final heard = client is SharedClient ? client.lastMessageAt : null;
+          if (error is TimeoutException &&
+              heard != null &&
+              heard.isAfter(probeFrom)) {
+            _logger.info('Keepalive answer late — link active', {
+              'serverId': serverId,
+              'afterMs': watch.elapsedMilliseconds,
+            });
+            continue;
+          }
+          // A missed probe is not the verdict; silence is. The link is called
+          // dead only when nothing at all has come back for [dropAfterSilence].
+          // Counting misses against an RTT-scaled wait dropped a board whose
+          // answers were only held up by radio retransmission: the wait shrank
+          // to 4.2 s on a good minute, two lost frames cost 4.5 s, and the
+          // fourth such miss cut a link TCP would have delivered (2026-09-21).
+          // A new connection rides the same radio, so it cannot do better.
+          if (error is TimeoutException) {
+            final since = heard ?? e.value.connectedAt ?? probeFrom;
+            final silent = DateTime.now().difference(since);
+            if (silent < dropAfterSilence) {
+              _logger.info('Keepalive answer missed — keeping the link', {
+                'serverId': serverId,
+                'afterMs': watch.elapsedMilliseconds,
+                'silentMs': silent.inMilliseconds,
+              });
+              continue;
+            }
+          }
+          // Say why. A drop with no reason left a day of measurement guessing
+          // between the board, the network and this side.
+          _logger.info('Keepalive probe failed', {
+            'serverId': serverId,
+            'afterMs': watch.elapsedMilliseconds,
+            'error': error.toString(),
+          });
+          _handleTransportDrop(serverId, DisconnectReason.transportError);
+        }
       }
+    } finally {
+      _sweeping = false;
     }
+  }
+
+  bool _sweeping = false;
+
+  /// Smoothed probe round trip per server — the device's own pace.
+  final Map<String, Duration> _probeRtt = {};
+
+  /// The wait for one probe: four times this device's measured round trip,
+  /// never below the caller's floor and never past [_probeLimitCeiling]. A
+  /// fixed line judged a slow device by a fast device's clock (23 §6.1.2).
+  Duration _probeLimit(String serverId, Duration floor) {
+    final rtt = _probeRtt[serverId];
+    if (rtt == null) return floor;
+    final scaled = rtt * 4;
+    if (scaled < floor) return floor;
+    if (scaled > _probeLimitCeiling) return _probeLimitCeiling;
+    return scaled;
+  }
+
+  void _recordProbe(String serverId, Duration took) {
+    final prev = _probeRtt[serverId];
+    _probeRtt[serverId] =
+        prev == null ? took : Duration(microseconds: (prev.inMicroseconds * 7 + took.inMicroseconds) ~/ 8);
+  }
+
+  static const Duration _probeLimitCeiling = Duration(seconds: 20);
+
+
+  /// How long a link may send nothing at all before it is called dead.
+  ///
+  /// Longer than lwIP's retransmission ladder on a lossy 2.4 GHz link
+  /// (1.5 + 3 + 6 + 12 s): a board whose frames are being retransmitted is
+  /// alive, and TCP delivers what it sent. A streaming board speaks every
+  /// second, so thirty silent seconds is not a slow answer. A transport that
+  /// actually closes is still dropped at once through `onDisconnect`.
+  static const Duration _silenceToDrop = Duration(seconds: 30);
+
+  /// How a connection is shared (23 §6.1). A serving device — a board on a
+  /// stream transport, or a device borrowed from another host — has a surface
+  /// fixed for the connection: its lists and documents are read once. A board
+  /// serves one request at a time, so it gets one at a time; the rest wait
+  /// here. A general server keeps only what it promised to announce.
+  ///
+  /// The device's own declaration of its capacity should replace the tier
+  /// default once the serving manifest carries it.
+  static ConnectionSharing _sharingFor(ServerConfig server) {
+    final base = server.transportType == TransportType.streamableHttp
+        ? server.transportConfig['baseUrl']
+        : null;
+    final board = _isTransientStream(server);
+    final borrowed = base is String && base.startsWith('peer://');
+    return ConnectionSharing(
+      surfaceFixed: board || borrowed,
+      maxInFlight: board ? 1 : null,
+    );
   }
 
   static bool _isTransientStream(ServerConfig server) {
@@ -269,8 +480,50 @@ class ConnectionManager extends ChangeNotifier {
             base.startsWith('serial://'));
   }
 
-  /// FR-CONN-004
+  /// Who holds each connection — this host's app screen, each lent session.
+  /// Letting go is counted (23 §6.1.4): one holder leaving must not close a
+  /// connection others are still using.
+  final Map<String, Set<String>> _holders = {};
+
+  /// [holder] uses the connection of [serverId]. Idempotent per holder.
+  void retain(String serverId, String holder) =>
+      (_holders[serverId] ??= <String>{}).add(holder);
+
+  /// [holder] is done with [serverId]. The connection closes only when the
+  /// last holder lets go.
+  Future<void> release(String serverId, String holder) async {
+    final holders = _holders[serverId];
+    holders?.remove(holder);
+    if (holders != null && holders.isNotEmpty) {
+      _logger.debug('Released — still held', {
+        'serverId': serverId,
+        'holder': holder,
+        'holders': holders.length,
+      });
+      return;
+    }
+    _holders.remove(serverId);
+    await disconnect(serverId);
+  }
+
+  /// Whether anyone holds [serverId]. A short-lived use (a metadata read, an
+  /// open that gave up) closes the connection only when nobody does.
+  bool isHeld(String serverId) => _holders[serverId]?.isNotEmpty ?? false;
+
+  /// FR-CONN-004 — close [serverId] now, whoever holds it. For taking a device
+  /// away (card removed, lending withdrawn — 23 §6); letting go is [release].
   Future<void> disconnect(String serverId) async {
+    _holders.remove(serverId);
+    await _teardown(serverId);
+  }
+
+  /// Close [serverId] for a while — the host is paused — keeping who holds
+  /// it. Resuming dials again for the same holders.
+  Future<void> suspend(String serverId) => _teardown(serverId);
+
+  /// Close the client and drop the entry, keeping who holds it: a reconnect
+  /// replaces the connection, its holders have not left.
+  Future<void> _teardown(String serverId) async {
     final info = _connections[serverId];
     if (info == null) return;
 
@@ -314,7 +567,7 @@ class ConnectionManager extends ChangeNotifier {
       return ConnectionResult.failure('No connection found for server');
     }
     final server = existing.serverConfig;
-    await disconnect(serverId);
+    await _teardown(serverId);
     return connect(server);
   }
 

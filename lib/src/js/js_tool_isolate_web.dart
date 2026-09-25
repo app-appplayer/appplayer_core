@@ -182,6 +182,7 @@ class JsToolIsolate {
         (data['atom'] as String?) ?? '',
         (data['verb'] as String?) ?? '',
         (data['args'] as List?)?.cast<Object?>() ?? const <Object?>[],
+        NonJsonArgument.listFromWire(data['nonJson']),
       );
       _post({
         'kind': _kHostResolve,

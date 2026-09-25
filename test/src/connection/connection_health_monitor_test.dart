@@ -1,3 +1,4 @@
+import 'package:appplayer_core/src/connection/awaits_reachability.dart';
 import 'package:appplayer_core/src/connection/connection_health_monitor.dart';
 import 'package:appplayer_core/src/connection/connection_manager.dart';
 import 'package:appplayer_core/src/connection/connection_state.dart';
@@ -233,6 +234,54 @@ void main() {
 
       // ~10 at a true 20ms pace; sweep-driven it would be exactly 1.
       expect(attempts, greaterThan(5));
+    });
+
+    test('TC-HEALTH-030: an open app whose endpoint is known to be absent '
+        'waits for the signal instead of dialling on the fixed pace', () async {
+      var attempts = 0;
+      final m = ConnectionManager(connector: (_) async {
+        attempts++;
+        throw const _LenderOffline();
+      });
+      await m.connect(_server());
+      expect(m.getConnection('s1')!.awaitsReachability, isTrue);
+      attempts = 0;
+
+      final monitor = ConnectionHealthMonitor(
+        conn: m,
+        config: const HealthMonitorConfig(
+          checkInterval: Duration(seconds: 10),
+          reconnectDelay: Duration(milliseconds: 20),
+        ),
+      )..isEngaged = (_) => true;
+
+      monitor.startMonitoring();
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      // Same setup as TC-HEALTH-017, which dials ~10 times here. Each of those
+      // failures rings every lifecycle listener (measured 2026-09-21: three
+      // notifications a second from a borrowed app whose lender was offline).
+      expect(attempts, lessThanOrEqualTo(1));
+
+      // The signal that the endpoint is back is what dials.
+      attempts = 0;
+      monitor.retryNow('s1');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      monitor.stopMonitoring();
+      expect(attempts, 1);
+    });
+
+    test('TC-HEALTH-031: an ordinary failure after an absent one is paced '
+        'again — the flag describes the last failure, not the server', () async {
+      var absent = true;
+      final m = ConnectionManager(connector: (_) async {
+        if (absent) throw const _LenderOffline();
+        throw StateError('refused');
+      });
+      await m.connect(_server());
+      expect(m.getConnection('s1')!.awaitsReachability, isTrue);
+      absent = false;
+      await m.reconnect('s1');
+      expect(m.getConnection('s1')!.awaitsReachability, isFalse);
     });
 
     test('TC-HEALTH-020: a reachability hint cuts the wait short', () async {
@@ -476,4 +525,8 @@ void main() {
           reason: 'No further attempts after stop');
     });
   });
+}
+
+class _LenderOffline implements AwaitsReachability, Exception {
+  const _LenderOffline();
 }

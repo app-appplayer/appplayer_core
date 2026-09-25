@@ -18,8 +18,13 @@ import 'package:brain_kernel/brain_kernel.dart'
     show
         BundleSessionBridge,
         DispatchSession,
-        DomainStorage,
+        AccountKbRecordStore,
+        BundleKbStore,
         InMemoryKvStoragePort,
+        KbAccountRecords,
+        KbRecordStore,
+        KvKbRecordStore,
+        KvStoragePort,
         KernelApp,
         KernelClientConnection,
         clientTools,
@@ -29,8 +34,7 @@ import 'package:brain_kernel/brain_kernel.dart'
 // outside the main barrel.
 import 'package:brain_kernel/mcp_host.dart'
     show ExtensionTransportConnect, McpClientKernelHost, connectExtension;
-import 'package:mcp_client/mcp_client.dart'
-    show Client, ClientTransport, McpClient, TransportConfig;
+import 'package:mcp_client/mcp_client.dart' show Client, ClientTransport;
 import '../bundle/bundle_application_adapter.dart';
 import '../js/atom_category.dart';
 import '../js/atoms/agent_atom.dart';
@@ -55,6 +59,7 @@ import '../capability/capability_consent_manager.dart';
 import '../connection/connection_continuity.dart';
 import '../connection/connection_health_monitor.dart';
 import '../connection/connection_info.dart';
+import '../connection/connection_result.dart';
 import '../connection/connection_manager.dart';
 import '../connection/connection_state.dart';
 import '../debug/debug_capture.dart';
@@ -96,11 +101,19 @@ import '../tenant/tenant_source.dart';
 /// Internal wire state for per-session JS tools — held by `AppSessionImpl`
 /// so `close()` can tear down the isolate + unregister dispatcher entries.
 class _JsToolWireState {
-  _JsToolWireState({required this.runtime, required this.toolNames});
+  _JsToolWireState({
+    required this.runtime,
+    required this.toolNames,
+    this.connectionIds = const <String>{},
+  });
   // Null when the bundle declares no js tools — its cloud / mcp tools still
   // register, and still unregister with the session.
   final JsToolRuntime? runtime;
   final List<String> toolNames;
+
+  /// Client-host connections this bundle's `kind: mcp` tools open, closed with
+  /// the session.
+  final Set<String> connectionIds;
 }
 
 /// MCP Serving 1.0 — well-known resource URI carrying the whole bundle
@@ -140,9 +153,18 @@ class AppPlayerCoreService {
   late final MetricsPort _metrics;
   late final CredentialVault _credentialVault;
 
-  /// Durable per-bundle state behind the js `kb` atom. Null when the host
-  /// wired none — then `host.kb` is not offered at all.
-  DomainStorage? _domainStorage;
+  /// The kernel's key/value store — the one the kernel boots on, and the one a
+  /// bundle's `host.kb` records live in.
+  late final KvStoragePort _kv;
+  late final KvKbRecordStore _kbRecords;
+
+  /// The account's `kb` records while the host has a signed-in, syncing
+  /// account; null otherwise. Asked each time a bundle session opens, so a
+  /// sign-in or sign-out between sessions is honoured.
+  KbAccountRecords? Function()? _kbAccountOf;
+
+  /// The app identity a bundle's `host.kb` state is keyed by, from the host.
+  String? Function(String bundleId)? _appIdOf;
   late final BundleLoaderAdapter _bundleLoader;
   late final BundleResolver _bundleResolver;
   late final BundleApplicationAdapter _bundleAdapter;
@@ -552,10 +574,19 @@ class AppPlayerCoreService {
     ConsentPrompt? consentPrompt,
     ConsentStore? consentStore,
     MemoryReclaimer? memoryReclaimer,
-    // Durable per-bundle state for the js `kb` atom (bundle spec §4.8.1).
-    // Native hosts pass a [JsonFileDomainStorage]; a host that passes none
-    // does not offer `host.kb`.
-    DomainStorage? domainStorage,
+    // The kernel key/value store. Native hosts pass a file store so the
+    // kernel's facts and every bundle's `host.kb` state survive a restart;
+    // without one both live in memory for the life of the process.
+    KvStoragePort? kvStorage,
+    // The app identity a bundle's `host.kb` state is keyed by — the host
+    // answers `listing:<listingId>` for a marketplace install. A null hook or
+    // a null answer means `bundle:<manifest.id>`.
+    String? Function(String bundleId)? appIdOf,
+    // Where a bundle's `host.kb` records live while the host is signed in to
+    // an account that syncs (platform spec 20 §2 `app/<appId>`). Asked when a
+    // bundle session opens; a null hook or a null answer keeps them on this
+    // device.
+    KbAccountRecords? Function()? kbAccountRecords,
     // Debug MCP (FR-DEBUG) — a desktop-only, settings-gated MCP endpoint
     // for test automation (screenshot / tree / tap / type). The desktop
     // gate is enforced here in core, so hosts may pass the raw user pref.
@@ -571,7 +602,10 @@ class AppPlayerCoreService {
     _credentialVault = credentialVault ?? const NoopCredentialVault();
     _storage = storage;
     _bundleInstallRoot = bundleInstallRoot;
-    _domainStorage = domainStorage;
+    _kv = kvStorage ?? InMemoryKvStoragePort();
+    _kbRecords = KvKbRecordStore(_kv);
+    _appIdOf = appIdOf;
+    _kbAccountOf = kbAccountRecords;
     _conn = ConnectionManager(logger: _logger, connector: _testConnector);
     // UI DSL §6.13 — the platform powers this host can actually perform. A
     // tier that wires none is still conformant: every affected widget reports
@@ -714,7 +748,7 @@ class AppPlayerCoreService {
     try {
       _kernel = await KernelApp.boot(
         workspaceId: workspaceId,
-        kvStorage: InMemoryKvStoragePort(),
+        kvStorage: _kv,
         // Co-locate the BM25 retrieval store with the bundle install
         // root so it is cleaned up alongside the bundles themselves.
         bundleRegistryStorageDir: bundleInstallRoot,
@@ -902,9 +936,27 @@ class AppPlayerCoreService {
       return metadata;
     } finally {
       // Install is metadata-only: close the connection once the metadata is
-      // read. The socket is re-established on the first real open (tap).
-      await _conn.disconnect(serverId);
+      // read — unless someone holds it. A connection this host's screen or a
+      // lent session is using is not this read's to close (23 §6.1.4).
+      if (!_conn.isHeld(serverId)) await _conn.disconnect(serverId);
     }
+  }
+
+  /// The holder name for this host's own app screen on a connection.
+  static const String _appHolder = 'app';
+
+  /// [holder] uses the connection of [serverId] — a lent session, say. Pair
+  /// with [releaseConnection]; the connection closes when its last holder lets
+  /// go (23 §6.1.4).
+  void retainConnection(String serverId, String holder) {
+    _assertReady();
+    _conn.retain(serverId, holder);
+  }
+
+  /// [holder] is done with [serverId]'s connection.
+  Future<void> releaseConnection(String serverId, String holder) async {
+    _assertReady();
+    await _conn.release(serverId, holder);
   }
 
   /// FR-CORE-002 — Online path (MCP server serves `ui://` application).
@@ -916,31 +968,57 @@ class AppPlayerCoreService {
   /// at it (MCP UI DSL 8.9, platform spec 19). Both are absent for an app
   /// opened from the launcher; an [entry] naming a route opens the app on
   /// that page instead of its own initial route.
+  /// Opens the app served by [serverId].
+  ///
+  /// [connectWithin] bounds the connect, and bounding it is the caller's only
+  /// way to stop waiting *safely*: `Future.timeout` on the returned future
+  /// abandons the wait without cancelling the connect, leaving a half-open
+  /// attempt that goes on dialling and re-announcing behind whatever the caller
+  /// does next. Measured 2026-09-21 on a phone holding a stale LAN address —
+  /// the caller moved on to borrowing, the abandoned connect and its cleanup
+  /// raced, and the open never completed. Given here, the connect is torn down
+  /// before [ConnectionTimeoutException] is thrown, so nothing outlives it.
   Future<AppSession> openAppFromServer(
     String serverId, {
     TrustLevel trustLevel = TrustLevel.basic,
     EntryContext? entry,
     IdentityContext? identity,
     String? launchRoute,
+    Duration? connectWithin,
   }) async {
     _assertReady();
     return _withTenantGuard(
       serverId: serverId,
       operation: () => _openFromServerImpl(
-          serverId, trustLevel, entry, identity, launchRoute),
+          serverId, trustLevel, entry, identity, launchRoute, connectWithin),
     );
   }
 
   Future<AppSession> _openFromServerImpl(String serverId, TrustLevel trustLevel,
       [EntryContext? entry,
       IdentityContext? identity,
-      String? launchRoute]) async {
+      String? launchRoute,
+      Duration? connectWithin]) async {
     final server = await _storage.getById(serverId);
     if (server == null) {
       throw ServerNotFoundException(serverId);
     }
 
-    final result = await _conn.connect(server);
+    final ConnectionResult result;
+    if (connectWithin == null) {
+      result = await _conn.connect(server);
+    } else {
+      try {
+        result = await _conn.connect(server).timeout(connectWithin);
+      } on TimeoutException {
+        // Tear the attempt down before reporting it. Without this the caller
+        // would be told to give up while the connect carried on. A connection
+        // someone else holds is theirs: this open gives up waiting and leaves
+        // it (23 §6.1.4).
+        if (!_conn.isHeld(serverId)) await _conn.disconnect(serverId);
+        throw ConnectionTimeoutException(serverId);
+      }
+    }
     if (!result.success || result.connection?.client == null) {
       throw ConnectionFailedException(
         serverId,
@@ -948,6 +1026,8 @@ class AppPlayerCoreService {
       );
     }
     final client = result.connection!.client!;
+    // This host's screen now holds the connection; closeApp lets go of it.
+    _conn.retain(serverId, _appHolder);
 
     await _storage.updateLastConnected(serverId, DateTime.now());
 
@@ -1058,16 +1138,16 @@ class AppPlayerCoreService {
         // installs later.
         onToolCall: _toolDispatcher.routerFor(client),
         pageLoader: wrapped && appUri != null
-            ? _appLoader.cachingPageLoaderFor(
-                client,
+            ? _appLoader.cachingResolvingPageLoader(
+                () => _liveClientFor(serverId),
                 {appUri: loaded},
                 transform: servedUriResolver == null
                     ? null
                     : (page) => servedUriResolver.rewriteDefinition(page)
                         as Map<String, dynamic>,
               )
-            : _appLoader.pageLoaderFor(
-                client,
+            : _appLoader.resolvingPageLoader(
+                () => _liveClientFor(serverId),
                 transform: servedUriResolver == null
                     ? null
                     : (page) => servedUriResolver.rewriteDefinition(page)
@@ -1124,6 +1204,7 @@ class AppPlayerCoreService {
           ? null
           : () async {
               final id = servedBundleId!;
+              await _closeBundleConnections(jsState);
               final session = _sessions.remove(id);
               if (session != null) await _bridge?.closeSession(session);
               await _kernel?.deactivate(id);
@@ -1273,6 +1354,7 @@ class AppPlayerCoreService {
       jsRuntime: jsState?.runtime,
       jsToolNames: jsState?.toolNames ?? const <String>[],
       onClose: () async {
+        await _closeBundleConnections(jsState);
         final session = _sessions.remove(bundleId);
         if (session != null) await _bridge?.closeSession(session);
         await _kernel?.deactivate(bundleId);
@@ -1332,19 +1414,23 @@ class AppPlayerCoreService {
     return _wireJsTools(bundle, bundleId);
   }
 
-  /// Connects to the MCP server a bundle's `kind: mcp` tool names — the same
-  /// connect the core uses for any server.
-  static Future<Client> _connectBundleMcpServer(
-    TransportConfig transport,
-  ) async {
-    final result = await McpClient.createAndConnect(
-      config: McpClient.simpleConfig(name: 'AppPlayer bundle tool', version: '1.0.0'),
-      transportConfig: transport,
-    );
-    if (result.isFailure) {
-      throw StateError('Failed to connect: ${result.failureOrNull}');
+  /// The app identity a bundle's `host.kb` state is keyed by.
+  String _appIdFor(String bundleId) =>
+      _appIdOf?.call(bundleId) ?? 'bundle:$bundleId';
+
+  /// Closes the client-host connections a bundle's `kind: mcp` tools opened.
+  Future<void> _closeBundleConnections(_JsToolWireState? state) async {
+    final host = _kernel?.clientHost;
+    if (host == null || state == null || state.connectionIds.isEmpty) return;
+    for (final connection in host.connections.toList()) {
+      if (!state.connectionIds.contains(connection.id)) continue;
+      try {
+        await connection.close();
+      } catch (e) {
+        _logger.warn('bundle mcp connection close threw',
+            {'connection': connection.id}, e);
+      }
     }
-    return result.get();
   }
 
   Future<_JsToolWireState?> _wireJsTools(
@@ -1357,14 +1443,23 @@ class AppPlayerCoreService {
     // runs both kinds; a bundle whose js calls one must not work there and
     // fail here.
     final registered = <String>[];
+    final connectionIds = <String>{};
     for (final t in tools) {
       final InProcessToolHandler handler;
       switch (t.kind) {
         case ToolKind.cloud:
           handler = cloudToolHandler(t.name, t.target);
         case ToolKind.mcp:
-          handler = mcpToolHandler(t.name, t.target,
-              connect: _testConnector ?? _connectBundleMcpServer);
+          // One connection per server per bundle, in the kernel's client host:
+          // reused by every tool that names the server, closed with the session.
+          final connectionId = mcpConnectionId(bundleId, t.target);
+          connectionIds.add(connectionId);
+          handler = mcpToolHandler(
+            t.name,
+            t.target,
+            clientHost: () => _kernel?.clientHost,
+            connectionId: connectionId,
+          );
         default:
           continue;
       }
@@ -1375,7 +1470,11 @@ class AppPlayerCoreService {
     if (jsEntries.isEmpty) {
       return registered.isEmpty
           ? null
-          : _JsToolWireState(runtime: null, toolNames: registered);
+          : _JsToolWireState(
+              runtime: null,
+              toolNames: registered,
+              connectionIds: connectionIds,
+            );
     }
     // Read the entry scripts through the bundle's own file surface. A
     // path would restrict JS tools to hosts that can resolve one, and
@@ -1388,7 +1487,11 @@ class AppPlayerCoreService {
       );
       return registered.isEmpty
           ? null
-          : _JsToolWireState(runtime: null, toolNames: registered);
+          : _JsToolWireState(
+              runtime: null,
+              toolNames: registered,
+              connectionIds: connectionIds,
+            );
     }
 
     final runtime = JsToolRuntime();
@@ -1398,12 +1501,11 @@ class AppPlayerCoreService {
       if (_kernel != null)
         AgentAtom(_kernel!, bridge: _bridge, session: session),
       BundleAtom(bundle: bundle),
-      if (_domainStorage != null)
-        KbAtom(
-          storage: _domainStorage!,
-          namespace: bundle.manifest.id,
-          engine: _kernel?.queryEngine,
-        ),
+      KbAtom(BundleKbStore(
+        appId: _appIdFor(bundleId),
+        records: _kbRecordsForSession(),
+        engine: _kernel?.queryEngine,
+      )),
     ];
     // When the manifest declares `requires.builtinAtoms`, expose only
     // that set. Otherwise expose every atom the core provides. Host
@@ -1420,7 +1522,11 @@ class AppPlayerCoreService {
       await runtime.dispose();
       return registered.isEmpty
           ? null
-          : _JsToolWireState(runtime: null, toolNames: registered);
+          : _JsToolWireState(
+              runtime: null,
+              toolNames: registered,
+              connectionIds: connectionIds,
+            );
     }
 
     for (final t in jsEntries) {
@@ -1484,7 +1590,11 @@ class AppPlayerCoreService {
       registered.add(toolName);
     }
 
-    return _JsToolWireState(runtime: runtime, toolNames: registered);
+    return _JsToolWireState(
+      runtime: runtime,
+      toolNames: registered,
+      connectionIds: connectionIds,
+    );
   }
 
   /// Called by host shells (Standard chrome, Pro launcher, ...) when the
@@ -1524,7 +1634,9 @@ class AppPlayerCoreService {
     _metadataCache.remove(handle);
 
     if (handle.source == AppSource.server) {
-      await _conn.disconnect(handle.key);
+      // Let go of this screen's hold only. A lent session on the same
+      // connection keeps it open (23 §6.1.4).
+      await _conn.release(handle.key, _appHolder);
     } else if (handle.source == AppSource.bundle) {
       // Also tear down the brain_kernel BundleActivation. The
       // `AppSession.close` onClose hook performs the same operation;
@@ -1542,6 +1654,63 @@ class AppPlayerCoreService {
         );
       }
     }
+  }
+
+  /// The app for server [serverId] is gone — its card was removed, here or on
+  /// another device of the account — so this device stops holding what the
+  /// app held.
+  ///
+  /// The app's own runtime always goes, and so does the connection — unless a
+  /// dashboard tile is still showing this device (its summary runtime is open).
+  /// Keeping a removed app's connection holds a single-peer board (or an
+  /// exclusive serial port) that another host — or this host's own discovery —
+  /// can then not reach.
+  ///
+  /// Kernel adoptions of the link (a composed origin, a lending session, a
+  /// payment identity check) are closed with it rather than counted as users:
+  /// they are adopted once and kept for the run, so counting them kept every
+  /// device that was ever lent (measured 2026-09-17). They cannot come back to
+  /// a removed device either — reopening one needs the saved server settings,
+  /// which the host deletes with the card.
+  ///
+  /// Returns whether the connection was released.
+  Future<bool> releaseServerApp(String serverId) async {
+    _assertReady();
+    final handle = AppHandle.server(serverId);
+    final runtime = _runtime.getRuntime(handle);
+    final client = _conn.connections[serverId]?.client;
+    if (runtime != null && client != null) {
+      await _resourceSub.unsubscribeAllFor(
+        client: client,
+        runtime: runtime,
+        ownerKey: handle.key,
+      );
+    }
+    await _runtime.removeRuntime(handle);
+    _metadataCache.remove(handle);
+
+    if (_runtime.getRuntime(
+            DashboardOrchestrator.deviceSummaryRuntimeHandle(serverId)) !=
+        null) {
+      _logger.info('Server app released; connection kept for its consumers',
+          {'serverId': serverId, 'consumers': const ['dashboard']});
+      return false;
+    }
+    final adopted = <KernelClientConnection>[
+      ...?_kernel?.clientHost?.connections.where((c) => c.id == serverId),
+    ];
+    for (final connection in adopted) {
+      try {
+        await connection.close();
+      } catch (e, st) {
+        _logger.logError('Closing a kernel adoption failed', e, st,
+            {'serverId': serverId});
+      }
+    }
+    await _conn.disconnect(serverId);
+    _logger.info('Server app released with its connection',
+        {'serverId': serverId});
+    return true;
   }
 
   // Bundle install lifecycle (FR-INSTALL-001~005).
@@ -1583,12 +1752,28 @@ class AppPlayerCoreService {
     return installed;
   }
 
+  /// The `kb` records a session opened now uses: the account's while the host
+  /// answers one, this device's otherwise.
+  KbRecordStore _kbRecordsForSession() {
+    final account = _kbAccountOf?.call();
+    return account == null
+        ? _kbRecords
+        : AccountKbRecordStore(account: account, kv: _kv);
+  }
+
   Future<void> uninstallBundle(String bundleId) async {
     _assertReady();
     await _bundleInstaller.uninstall(bundleId);
-    // A reinstall starts clean: state the removed bundle kept in `host.kb`
-    // must not surface in whatever installs under the same id next.
-    await _domainStorage?.clearNamespace(bundleId);
+    // Uninstalling here drops this device's copy of the bundle's `host.kb`
+    // state, so a reinstall starts from the account's copy or from nothing.
+    // The account's copy is not the device's to delete.
+    final appId = _appIdFor(bundleId);
+    for (final id in {appId, 'bundle:$bundleId'}) {
+      await _kbRecords.clear(id);
+      // A device that was signed in earlier also holds the account copy and
+      // queue for this app; they are this device's too.
+      await AccountKbRecordStore.clearDeviceCopy(_kv, id);
+    }
     await _invalidateBundleCaches(bundleId);
   }
 
@@ -1827,6 +2012,34 @@ class AppPlayerCoreService {
     return _conn;
   }
 
+  /// How long a page read waits for a dropped connection to come back.
+  static const Duration _pageReadReconnectWait = Duration(seconds: 20);
+
+  /// The client [serverId] is connected through **now**.
+  ///
+  /// An open app keeps loading pages long after it was opened, and a reconnect
+  /// replaces the client underneath it. Reading through the client captured at
+  /// open time kept failing with "Transport disconnected" after the reconnect
+  /// had already succeeded, on a screen with nothing to retry (measured
+  /// 2026-09-17, ESP32 over Wi-Fi). While a reconnect is in progress the read
+  /// waits for it, up to [_pageReadReconnectWait].
+  Future<Client> _liveClientFor(String serverId) async {
+    final deadline = DateTime.now().add(_pageReadReconnectWait);
+    while (true) {
+      final info = _conn.getConnection(serverId);
+      final client = info?.client;
+      if (info != null &&
+          info.state == ConnectionState.connected &&
+          client != null) {
+        return client;
+      }
+      if (!DateTime.now().isBefore(deadline)) {
+        throw ConnectionTimeoutException(serverId);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
   /// Re-binds an open app's per-connection state onto a freshly attached
   /// client. Runs on first connect too, where it is a no-op: nothing has
   /// subscribed yet and the open path registers its own handler.
@@ -1916,6 +2129,13 @@ class AppPlayerCoreService {
   ResourceSubscriber get resourceSubscriberForInternals {
     _assertReady();
     return _resourceSub;
+  }
+
+  /// The kernel's outbound connections — what is adopted or opened through it.
+  @visibleForTesting
+  Iterable<KernelClientConnection> get kernelConnectionsForInternals {
+    _assertReady();
+    return _kernel?.clientHost?.connections ?? const [];
   }
 
   /// FR-CORE-006

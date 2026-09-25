@@ -1,119 +1,140 @@
-# capability probe — 산출물이 선언한 능력을 실제로 하는지 검사한다
+# capability probe — does the build actually do what it declares
 
-**이 검사는 게시 *전*에 돈다.** 게시본을 기다릴 이유가 없다 — 티어는 개발 중 로컬 패키지를
-path 로 물고 빌드하므로, 그 빌드가 곧 검사 대상이다. 게시 후에 돌리면 "고치려면 또 게시" 가
-되고, 그 반복이 지금까지의 모양이었다.
+**This check runs *before* publishing.** There is no reason to wait for the
+published package: during development a tier builds against the local packages
+by path, so that build is exactly what is under test. Run after publishing, it
+turns into "publish again to fix", and that loop is what it used to look like.
 
-`analyze 0` 도, 전량 PASS 도, dry-run 0 도 **소스에 대한 진술**이다. 이 폴더는 **빌드된 앱**에
-대고 묻는다: 선언한 능력이 화면에서 실제로 일어나는가.
+`analyze 0`, a full PASS and a clean dry-run are all **statements about the
+source**. This folder asks the **built app**: does each declared capability
+actually happen on screen.
 
-이 자리가 없어서 놓친 것:
+What went unnoticed while this did not exist:
 
-- **번들 PDF·Lottie 가 빈 상자였다.** 바이트가 필요한 표면이 `bundle://`→`file:` 재작성분을
-  못 읽었다. 재생(오디오)은 경로를 직접 열어서 멀쩡했고, 그래서 "자산 통로는 된다"고 믿었다.
-- **웹 플러그인 등기부가 낡은 채로 실렸다.** `connectivity_plus`·`audio_session`·
-  `just_audio_web`·`video_player_web` 이 등록되지 않아 재접속·오디오·비디오가 죽었는데,
-  스위트는 전부 초록이었다. 브라우저에서만 드러난다.
+- **Bundled PDF and Lottie drew empty boxes.** The surfaces that need bytes
+  could not read the `bundle://` → `file:` rewrite. Playback (audio) opened the
+  path directly and worked, which is why "the asset path works" was believed.
+- **The web plugin registrant shipped stale.** `connectivity_plus`,
+  `audio_session`, `just_audio_web` and `video_player_web` were not registered,
+  so reconnect, audio and video were dead while the suites were all green. It
+  shows only in a browser.
 
-두 건 다 **"테스트가 그 자리를 안 지나간다"** 는 같은 이유다.
+Both come from the same cause: **no test passes through that place.**
 
-## 쓰는 법
+## Usage
 
 ```bash
-python3 build_probe.py <bundle-root>       # 프로브 번들 + 자산 생성
-# 앱을 띄운 뒤 (디버그 MCP 포트가 열린 상태)
+python3 build_probe.py <bundle-root>       # build the probe bundle and assets
+# with the app running (debug MCP port open)
 python3 verify.py --port 7930 --bundle "Capability probe"
 ```
 
-### 프로브를 앱에 도달시키는 방법 — 두 갈래
+### Getting the probe into the app — two ways
 
-1. **`app.open` (권장)** — 디버그 호스트가 설치된 번들을 id 로 연다. 런처를 거치지 않으므로
-   **사용자의 앱 목록을 건드리지 않는다.** 코어(`AppPlayerCoreService.debugOpenBundle`)에 문은
-   나 있고, **티어가 자기 셸의 라우팅을 물려야** 동작한다:
+1. **`app.open` (recommended)** — the debug host opens an installed bundle by
+   id. It does not go through the launcher, so **the user's app list is not
+   touched.** The core has the door (`AppPlayerCoreService.debugOpenBundle`);
+   **each tier wires its own shell routing** to it:
 
    ```dart
-   core.debugOpenBundle = openInstalledBundleFromDebug;  // 각 티어 셸에서 한 줄
+   core.debugOpenBundle = openInstalledBundleFromDebug;  // one line per tier shell
    ```
 
-   **이것 때문에 코어를 게시하지 않는다.** 하네스는 개발 트리에서 돈다 — 티어가 로컬 코어를
-   path 로 물고 빌드한 상태(게시 전 평소 상태)면 문은 이미 있다. 이 문은 다음 *실제* 컷에
-   묻어서 나간다. 검사 도구를 위해 버전을 올리는 것은 이 고리의 시작이다.
+   **The core is not published for this.** The harness runs on the development
+   tree — a tier building against the local core by path (the normal state
+   before a release) already has the door. It ships with the next *real* cut.
+   Bumping a version for a test tool is how the loop starts.
 
-2. **런처 등기(임시)** — `register_probe.py <prefs-domain>` 으로 앱 목록에 넣는다.
-   **앱이 떠 있으면 안 된다** — 실행 중인 앱이 자기 목록을 다시 써서 등기가 사라지거나,
-   더 나쁘게는 **앱이 들고 있던 목록을 낡은 사본으로 덮는다**(실측으로 겪었다).
-   그래서 이 갈래는 임시다: 측정하려고 측정 대상을 바꾼다.
+2. **Launcher registration (temporary)** — `register_probe.py <prefs-domain>`
+   puts it into the app list. **The app must not be running** — a running app
+   rewrites its own list and the registration disappears, or worse, **the app
+   overwrites the list it held with a stale copy** (seen in practice). So this
+   way is temporary: it changes what is measured in order to measure it.
 
-`verify.py` 는 화면을 훑으며 두 가지를 본다:
+`verify.py` walks the screen and checks two things:
 
-1. **보고** — 각 섹션의 `… err:` 줄이 전부 `(none)` 인가. 능력이 없으면 §6.13 대로 *보고*되므로
-   빈 문자열이 아니라 사유가 찍혀야 하고, 있으면 `(none)` 이어야 한다.
-2. **그림** — 섹션 영역에서 **자기 배경 위에 얹힌 픽셀**이 몇 개인가. 색 가짓수로 세면 검은
-   화면 위의 빨간 사각형이 "2색" 이라 탈락한다 — 배경(그 띠에서 가장 많은 색)과 다른 픽셀을
-   센다.
+1. **Reports** — every section's `… err:` line reads `(none)`. A missing
+   capability is *reported* per §6.13, so a reason must be printed rather than
+   an empty string, and a present one must read `(none)`.
+2. **Drawing** — how many pixels in the section sit **on top of its own
+   background**. Counting colours fails a red square on a black screen as "two
+   colours", so pixels different from the background (the most common colour in
+   that band) are counted.
 
-**플랫폼 뷰는 픽셀로 못 잰다.** 웹뷰·비디오는 네이티브 뷰라 Flutter 스크린샷에 안 잡힌다 —
-멀쩡히 동작해도 빈 화면으로 읽힌다. 그 섹션들(`--platform-view`)은 **보고만으로** 판정한다.
-이걸 모르고 픽셀로 재면 매번 거짓 실패가 나고, 그러면 게이트를 끄게 된다.
+**Platform views cannot be measured in pixels.** A web view or a video is a
+native view and does not appear in a Flutter screenshot — it reads as blank even
+when it works. Those sections (`--platform-view`) are judged **by their report
+only**. Measuring them in pixels fails every time, and then the gate gets turned
+off.
 
-둘 중 하나라도 어긋나면 **0 이 아닌 코드로 끝난다.** 게시 게이트가 이것을 부른다.
+If either check disagrees, the run **exits non-zero.** The publish gate calls it.
 
-## 두 번째 게이트 — 스펙이 자기 본문에 적어 둔 식 (`run_corpus.py`)
+## The second gate — expressions the spec writes in its own text (`run_corpus.py`)
 
-능력 프로브는 **표면이 그렸는가**를 묻는다. 그리기 전에 값이 비어 버리는 결함은 못 잡는다 —
-`{{round(price * quantity, 2)}}` 는 §3.6.1 이 자기 예시로 적어 둔 줄인데 0.5.1 부터 화면에서
-**빈 문자열**이었고, 스위트 5,600 개가 초록이었다. 아무도 스펙을 읽지 않았기 때문이다.
+The capability probe asks **whether a surface drew**. It cannot catch a value
+that went empty before drawing — `{{round(price * quantity, 2)}}` is written by
+§3.6.1 as its own example and was an **empty string** on screen from 0.5.1 on,
+while 5,600 tests were green. Nobody had read the spec.
 
 ```bash
-python3 run_corpus.py --port 7930      # 호스트를 띄워 둔 상태에서
+python3 run_corpus.py --port 7930      # with the host running
 ```
 
-`spec_expression_corpus.json` 에서 번들을 만들어 설치 → `app.open` → `ui.text` 로 **칠해진 값**을
-읽어 기대값과 대조한다. 실패가 있으면 exit code 가 0 이 아니다.
+It builds a bundle from `spec_expression_corpus.json`, installs it, `app.open`s
+it and reads the **painted value** with `ui.text`, comparing it with the
+expected one. Any failure exits non-zero.
 
-유닛 짝은 런타임 패키지에 있다(`test/spec/spec_expressions_test.dart`) — 같은 코퍼스를 엔진에
-직접 물린다. 둘 다 필요하다: 유닛은 매 변경마다 돌고 결함을 정확히 짚고, 이쪽은 **값이 화면까지
-살아 남는지**를 본다. 빈 문자열은 화면에서 결함처럼 안 보이고 디자인처럼 보인다.
+The unit pair lives in the runtime package (`test/spec/spec_expressions_test.dart`)
+and feeds the same corpus to the engine directly. Both are needed: the unit
+runs on every change and points at the defect precisely; this one checks that
+**the value survives all the way to the screen.** An empty string does not look
+like a defect on screen; it looks like design.
 
-실측 주의: 호스트는 연 번들을 캐시한다. 디스크의 번들을 갈아 끼운 뒤에는 호스트를 재시작해야
-새 문서를 읽는다. 칠해지지 않은 케이스는 통과가 아니라 "not painted" 로 보고된다.
+Note: the host caches bundles it has opened. After replacing a bundle on disk,
+restart the host so it reads the new document. A case that was not painted is
+reported as "not painted", not as a pass.
 
-## 티어 현황 (2026-08-07)
+## Tier status (2026-08-07)
 
-| 티어 | 포트 | 문 배선 | 결과 |
+| Tier | Port | Door wiring | Result |
 |---|---|---|---|
-| Pro | 7930 | `core.debugOpenBundle = openInstalledBundleFromDebug` | **OK** — 24 검사 |
-| Standard | 7931 | `core.debugOpenBundle` → GoRouter `/app/:id` | **OK** — 16 검사 |
-| Custom | 7932 | 셸에 라우터가 없어 문과 캡처 경계를 같이 냈다 | **OK** — 16 검사 |
-| X | 7933 | 키오스크 앱을 *교체*한다 (`xDebugAppOverride`) | **OK** — 16 검사 |
-| Cloud(웹) | — | 브라우저 판이 필요하다(디버그 MCP 는 데스크톱 전용). 플러그인 등기부 검사와 함께 |  |
+| Pro | 7930 | `core.debugOpenBundle = openInstalledBundleFromDebug` | **OK** — 24 checks |
+| Standard | 7931 | `core.debugOpenBundle` → GoRouter `/app/:id` | **OK** — 16 checks |
+| Custom | 7932 | the shell had no router, so the door and the capture boundary were added together | **OK** — 16 checks |
+| X | 7933 | *replaces* the kiosk app (`xDebugAppOverride`) | **OK** — 16 checks |
+| Cloud (web) | — | needs a browser build (the debug MCP is desktop only), together with the plugin registrant check |  |
 
-**포트는 티어마다 다르다.** 겹치면 오류가 아니라 *조용히* 어긋난다 — 두 번째 bind 가 실패해
-그 티어의 호스트는 안 뜨고, 하네스는 먼저 잡은 앱을 잰다. X 가 Standard 와 같은 7931 이었고,
-나란히 띄우기 전에는 드러나지 않았다.
+**Ports differ per tier.** A clash is not an error; it goes wrong *silently* —
+the second bind fails, that tier's host never starts, and the harness measures
+the app that bound first. X shared 7931 with Standard, and it did not show until
+the two ran side by side.
 
-**X 는 라우트를 쌓지 않는다.** 전용 기기라 셸이 없고 앱 하나가 화면 전부다. 두 번째 렌더러를
-push 하면 앱 세션이 둘이 되는데 런타임의 테마 상태는 싱글턴이라 서로를 매 빌드 재기준화한다 —
-실측으로 페이지 전환이 그 자리에서 멈췄다. 그래서 X 의 문은 **키오스크가 보여 줄 앱을 바꾼다**:
-세션은 언제나 하나, 실제 기기와 같은 모양이다.
+**X does not stack routes.** A dedicated device has no shell; one app is the
+whole screen. Pushing a second renderer makes two app sessions, and the
+runtime's theme state is a singleton, so each rebased the other on every build —
+page transitions froze in place. So X's door **changes the app the kiosk
+shows**: always one session, the same shape as the real device.
 
-**Custom 은 셸 자체가 계약별 자리표시자**라 렌더 화면도 디버그 호스트도 없었다. 문
-(`openInstalledBundleFromDebug`) · 캡처 경계(`debugCaptureWrap`) · 디버그 호스트를 같이 냈고,
-Pro 의 렌더러를 재사용하되 Custom 에 없는 provider(코어·앱 목록)를 라우트에서 공급한다.
-앱 목록은 빈 채로 둔다 — 등록되지 않은 설치본을 여는 경로가 정확히 프로브가 쓰는 길이다.
+**Custom's shell is a per-contract placeholder**, so it had neither a render
+screen nor a debug host. The door (`openInstalledBundleFromDebug`), the capture
+boundary (`debugCaptureWrap`) and the debug host were added together; Pro's
+renderer is reused, with the providers Custom lacks (core, app list) supplied by
+the route. The app list stays empty — opening an unregistered installed bundle
+is exactly the path the probe uses.
 
-모든 티어가 **설치된 번들을 등록 없이** 여는 폴백을 쓴다 — 등록은 *런처에 보이는가* 를 정하지
-*실행 가능한가* 를 정하지 않는다. 그 폴백이 없으면 프로브가 사용자의 앱 목록을 고쳐야 하고,
-그러면 측정하려고 측정 대상을 바꾸게 된다.
+Every tier opens **an installed bundle without registering it** — registration
+decides *whether it shows in the launcher*, not *whether it can run*. Without
+that, the probe would have to edit the user's app list and would change what it
+measures in order to measure it.
 
-## 확인된 것 (2026-08-07, Pro)
+## Confirmed (2026-08-07, Pro)
 
 ```
 capability probe OK — 24 section checks, all reported (none) and drew
 ```
 
-그리고 **오늘 실제로 있었던 결함을 되돌려 넣어 실패하는 것까지 확인**했다 — 표면이 번들 자산
-바이트를 못 읽던 상태로 돌리면:
+And **the day's real defect was put back to confirm the gate fails** — with the
+surfaces unable to read bundled asset bytes again:
 
 ```
 capability probe FAILED (8 of 24 checks):
@@ -121,4 +142,5 @@ capability probe FAILED (8 of 24 checks):
   - pdf: reported <empty>
 ```
 
-이 게이트가 있었으면 그 결함은 **게시 전에** 잡혔다.
+With this gate in place, that defect would have been caught **before**
+publishing.

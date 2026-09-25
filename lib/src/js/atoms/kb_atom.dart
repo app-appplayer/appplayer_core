@@ -1,42 +1,39 @@
-/// `host.kb.*` atom — a bundle's durable key/value state, and knowledge query
-/// where the host has a knowledge engine (bundle spec §4.8.1).
+/// `host.kb.*` atom — forwards to the kernel's [BundleKbStore].
 ///
-/// Same verbs and the same return shapes as the reference Studio host, so a
-/// js tool written against one reads the same on the other:
+/// The contract (verbs, return shapes, key rules, versions and conflicts)
+/// lives in one implementation every host runs. This atom only unpacks js
+/// arguments, so it cannot answer differently from another host's.
 ///
 ///   * `get(key)` → value | `null`
-///   * `put(key, value)` → `{ok: true}`
-///   * `list(prefix?)` → `[{key, value}]`
-///   * `delete(key)` → `{removed: bool}`
-///   * `query(text, {topK?, namespace?, sourceId?})` → hits
-///
-/// Storage is **isolated per bundle** — every key is pinned to the bundle's
-/// `manifest.id`, and the js caller never names a namespace, so one bundle
-/// cannot read or overwrite another's state.
+///   * `put(key, value, [{force}])` → `{ok: true}` | `{ok: false, conflict: {value}}`
+///   * `list([prefix])` → `[{key, value}]`, ascending by key
+///   * `delete(key, [{force}])` → `{removed: bool}` | `{ok: false, conflict: {value}}`
+///   * `conflicts()` → `[{key, mine, theirs}]`
+///   * `query(text, [{topK, namespace, sourceId}])` → hits
 library;
 
-import 'package:brain_kernel/brain_kernel.dart'
-    show DomainStorage, KnowledgeQueryEngine;
+import 'package:brain_kernel/brain_kernel.dart' show BundleKbStore, KbError;
 
 import '../atom_category.dart';
+import '../js_bridge_protocol.dart' show NonJsonArgument, NonJsonArgumentPolicy;
 
-class KbAtom extends AtomCategory {
-  KbAtom({
-    required this.storage,
-    required this.namespace,
-    this.engine,
-  });
+class KbAtom extends AtomCategory implements NonJsonArgumentPolicy {
+  KbAtom(this.store);
 
-  /// Per-bundle durable state.
-  final DomainStorage storage;
+  /// A key JSON cannot carry is not a key; anything else it cannot carry is
+  /// not a value. Nothing is stored either way.
+  @override
+  Object refuseNonJson(String verb, List<NonJsonArgument> found) {
+    final first = found.first;
+    final keyArgument = verb != 'conflicts' && first.argumentIndex == 0;
+    return KbError(
+      keyArgument ? KbError.invalidKey : KbError.invalidValue,
+      'kb.$verb: ${first.where} is ${first.kind}, which JSON cannot carry',
+    );
+  }
 
-  /// The bundle's `manifest.id`; every get/put/list/delete is pinned to it.
-  final String namespace;
-
-  /// Knowledge query. Absent where the host booted no knowledge engine, and
-  /// then `query` refuses by name rather than answering an empty list that
-  /// reads like "nothing matched".
-  final KnowledgeQueryEngine? engine;
+  /// This bundle's state, keyed by its app identity.
+  final BundleKbStore store;
 
   @override
   String get key => 'kb';
@@ -44,14 +41,18 @@ class KbAtom extends AtomCategory {
   @override
   List<AtomVerb> get verbs => const [
         AtomVerb('get',
-            description: 'Read from this bundle\'s state. (key) → value | null.'),
+            description: "Read this app's value. (key) → value | null."),
         AtomVerb('put',
-            description: 'Write to this bundle\'s state. (key, value) → {ok}.'),
+            description: 'Write on the version last read. (key, value, '
+                '[{force}]) → {ok: true} | {ok: false, conflict: {value}}.'),
         AtomVerb('list',
-            description: 'Entries in this bundle\'s state. ([prefix]) → '
-                '[{key, value}].'),
+            description: "This app's entries. ([prefix]) → [{key, value}]."),
         AtomVerb('delete',
-            description: 'Remove an entry. (key) → {removed: bool}.'),
+            description: 'Remove on the version last read. (key, [{force}]) '
+                '→ {removed} | {ok: false, conflict: {value}}.'),
+        AtomVerb('conflicts',
+            description: 'Offline writes rejected on reconnect. () → '
+                '[{key, mine, theirs}].'),
         AtomVerb('query',
             description: 'Knowledge query. (text, [{topK, namespace, '
                 'sourceId}]) → hits.'),
@@ -59,54 +60,46 @@ class KbAtom extends AtomCategory {
 
   @override
   Future<Object?> dispatch(String verb, List<Object?> args) async {
+    Object? arg(int i) => i < args.length ? args[i] : null;
+    bool force(int i) {
+      final opts = arg(i);
+      return opts is Map && opts['force'] == true;
+    }
+
     switch (verb) {
       case 'get':
-        if (args.isEmpty) throw ArgumentError('get requires (key)');
-        return storage.get(namespace, _key(args[0]));
+        return store.get(_key(arg(0)));
       case 'put':
-        if (args.length < 2) throw ArgumentError('put requires (key, value)');
-        await storage.put(namespace, _key(args[0]), args[1]);
-        return const <String, dynamic>{'ok': true};
-      case 'list':
-        final prefix =
-            args.isNotEmpty && args[0] is String ? args[0] as String : '';
-        final entries = await storage.list(namespace, prefix: prefix);
-        return <Map<String, dynamic>>[
-          for (final e in entries)
-            <String, dynamic>{'key': e.key, 'value': e.value},
-        ];
-      case 'delete':
-        if (args.isEmpty) throw ArgumentError('delete requires (key)');
-        final removed = await storage.delete(namespace, _key(args[0]));
-        return <String, dynamic>{'removed': removed};
-      case 'query':
-        final engine = this.engine;
-        if (engine == null) {
-          throw StateError('kb.query is not available in this host: '
-              'no knowledge engine is running');
+        if (args.length < 2) {
+          throw const KbError(KbError.invalidValue, 'put requires (key, value)');
         }
-        if (args.isEmpty || args[0] is! String) {
+        return store.put(_key(arg(0)), arg(1), force: force(2));
+      case 'list':
+        final prefix = arg(0);
+        return store.list(prefix is String ? prefix : '');
+      case 'delete':
+        return store.delete(_key(arg(0)), force: force(1));
+      case 'conflicts':
+        return store.conflicts();
+      case 'query':
+        final text = arg(0);
+        if (text is! String) {
           throw ArgumentError('query requires (text, [opts])');
         }
-        final opts = args.length > 1 && args[1] is Map
-            ? args[1] as Map
-            : const <String, dynamic>{};
-        final hits = await engine.query(
-          args[0] as String,
+        final opts = arg(1) is Map ? arg(1) as Map : const <String, Object?>{};
+        return store.query(
+          text,
           topK: (opts['topK'] as num?)?.toInt() ?? 5,
           namespace: opts['namespace'] as String?,
           sourceId: opts['sourceId'] as String?,
         );
-        return <Map<String, dynamic>>[for (final h in hits) h.toJson()];
       default:
         throw ArgumentError('unknown verb: kb.$verb');
     }
   }
 
   static String _key(Object? raw) {
-    if (raw is! String || raw.isEmpty) {
-      throw ArgumentError('key must be a non-empty String');
-    }
-    return raw;
+    BundleKbStore.checkKey(raw);
+    return raw! as String;
   }
 }

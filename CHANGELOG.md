@@ -1,3 +1,76 @@
+## [0.2.0] - 2026-09-15
+
+### Breaking
+- `initialize(domainStorage:)` is removed. Hosts pass
+  `initialize(kvStorage:)` — the kernel's `KvStoragePort`, which the kernel
+  boots on as well — and native hosts use `KvStoragePortAdapter`. Without
+  one, state is kept in memory for the life of the process. `DomainStorage`
+  and `JsonFileDomainStorage` are no longer re-exported; `KvStoragePort` and
+  `KvStoragePortAdapter` are.
+- `KbAtom` takes a `BundleKbStore` instead of a storage and namespace.
+- `host.kb` is offered to every bundle. It used to be absent where a host
+  passed no storage.
+- `HostAtomDispatcher` takes a fourth argument, the `NonJsonArgument`s the
+  call carried. A non-empty list means the call is refused.
+
+### Added
+
+- `openAppFromServer(..., connectWithin:)` — the connect is bounded by the core, and a connect that runs out of time is closed rather than left finishing in the background (where it went on to spoil the next open).
+- `retainConnection(serverId, holder)` / `releaseConnection(serverId, holder)` — who holds a connection is counted. An open app and every session lent from it hold the same connection; it closes when the last holder lets go. Closing an app, a metadata read or an open that gave up no longer closes a connection somebody else still uses.
+- `AwaitsReachability` — a connect error that already knows the endpoint is absent and that something will announce its return. The health monitor then stops redialling an open app every second and waits for `hintReachable` (FR-HEALTH-011). `ConnectionInfo.awaitsReachability` reports it.
+- `OpenSourceLicenses` — the way into an app's open-source notices. `registerBundled(assetKey)` adds the notices an app keeps as an asset (native dependencies Flutter does not collect: Rust libraries, Swift packages, CocoaPods, Maven modules, bundled binaries); the format is `[{"packages": [..], "license": "full text"}]` and a malformed list throws. `open(context, appName:, version:)` shows everything registered next to the Dart packages Flutter collects. The list belongs to each app; this package only opens it.
+- `tool/licenses/` — generators an app runs on its own project: `apple_licenses.dart` (resolved Swift packages at their pinned revision, CocoaPods acknowledgements, unpinned binary artifacts) and `android_licenses.dart` (release runtime classpath modules, notices inside their archives, and every native library in the release APK traced to a module). Anything that cannot be traced stops the run unless the app's `tool/licenses/{apple,android}_extra.json` covers it.
+
+### Changed
+- `host.kb` records live in the kernel key-value store under
+- `tool/capability_probe/README.md` is in English, and the Python bytecode that was committed under `tool/capability_probe/__pycache__` is no longer part of the package.
+- Connections are shared through one client per server. A serving device (a board on a stream transport, or a device borrowed from another host) has a fixed surface: its lists and documents are read once per connection, and a board is sent one request at a time while the rest wait. A general server keeps only what it announces.
+- Liveness: any frame received — a stream notification or a reply still in flight — counts as the link being alive, and a probe is skipped when something arrived recently. The wait for one probe follows this device's measured round trip (four times it, never below the caller's floor, never above 20 s). A link is called dead after 30 s of silence; a transport that actually closes is still dropped at once.
+  `app/<appId>/kb/`, one record per key with a version. `appId` is what the
+  host's `initialize(appIdOf:)` answers for the bundle — a marketplace
+  listing, for example — and `bundle:<bundle id>` where it answers null.
+  Uninstalling a bundle clears this device's copy.
+- `host.kb.put` and `host.kb.delete` report a conflict — `{ok: false,
+  conflict: {value}}` — when the record changed after this bundle last read
+  it, and write anyway with `{force: true}`. `host.kb.conflicts()` lists the
+  conflicts not yet resolved.
+- `initialize(kbAccountRecords:)` — while the host answers an account's
+  records (signed in, syncing), a bundle session opened from then on keeps
+  its `host.kb` in the account's `app/<appId>` scope, with this device's copy
+  underneath. Writes made while the account is unreachable wait on the device
+  and go up when it answers; one whose base moved is reported by
+  `host.kb.conflicts()` and not forced. Uninstalling clears this device's
+  copy and queue, never the account's records.
+- `host.kb.list(prefix)` answers in ascending key order.
+- `host.kb` refuses a key that is empty, starts with `/`, contains `\` or NUL,
+  or has an empty, `.` or `..` segment (`KB_INVALID_KEY`), and a value that
+  is not JSON (`KB_INVALID_VALUE`). `query` without a knowledge engine fails
+  with `KB_QUERY_UNAVAILABLE`.
+- `kind: mcp` tools connect through the kernel's MCP client host: one
+  connection per bundle and server URL, reused across calls and closed when
+  the bundle's session closes. `target.tool` names the remote tool when it
+  differs from the bundle's tool name. A `stdio` server (`target.command`,
+  `target.args`) starts through the same client host on macOS, Windows and
+  Linux; on a phone or in a browser the call is refused with that reason. A
+  host without an outbound MCP client says so.
+- Floors `brain_kernel` at `^0.2.2` and `flutter_mcp_ui_runtime` at
+  `^0.8.0`.
+
+### Fixed
+- A `host.<atom>.<verb>` argument JSON cannot carry — a function, symbol,
+- A page read after a reconnect went through the closed transport and showed "Failed to load page". Page loaders now ask for the current client on every read and retry once only when the connection changed underneath the read; a failure on the same connection is the server's answer and is not masked.
+  bigint, `NaN`, `Infinity`, or a structure containing itself — reached the
+  atom as `null`, so `host.kb.put(key, fn)` stored `null`. The call is now
+  refused without running the verb, naming where the argument sat: `kb`
+  answers `KB_INVALID_KEY` or `KB_INVALID_VALUE`, and an atom can choose its
+  own error through `NonJsonArgumentPolicy`. `undefined` still crosses as
+  `null`, and an object property holding it is still omitted.
+- `evaluateAsync` on the native worker failed with `settle produced no
+  outcome` in two cases and hid the reason. Code ending in `;` — or in a `//`
+  comment — broke the wrapper that settles the value, so it never ran; it now
+  settles like the same expression without them. Code that is not an
+  expression now fails with the engine's own message.
+
 ## [0.1.30] - 2026-09-14
 
 ### Changed

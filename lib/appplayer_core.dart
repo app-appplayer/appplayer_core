@@ -16,6 +16,7 @@ export 'src/session/dashboard_session.dart';
 export 'src/session/app_handle.dart';
 
 // Connection observability (values)
+export 'src/connection/awaits_reachability.dart';
 export 'src/connection/connection_info.dart';
 export 'src/connection/connection_result.dart';
 export 'src/connection/connection_state.dart';
@@ -74,10 +75,10 @@ export 'src/metrics/metrics_port.dart';
 export 'src/runtime/notification_router.dart' show McpLogMessageHandler;
 // MCP logging spec — host passes McpLogLevel to setMcpLoggingLevel().
 export 'package:mcp_client/mcp_client.dart' show McpLogLevel;
-// Per-bundle durable state behind the js `kb` atom — hosts pass a
-// [DomainStorage] to `initialize`; the JSON-file adapter serves native hosts.
+// The kernel key/value store a host passes to `initialize(kvStorage:)`; the
+// file adapter serves native hosts.
 export 'package:brain_kernel/brain_kernel.dart'
-    show DomainStorage, DomainEntry, JsonFileDomainStorage;
+    show KvStoragePort, KvStoragePortAdapter;
 
 // Upstream version constant re-export (flutter_mcp_ui_core) — allows hosts
 // to display the DSL version without importing the runtime package directly.
@@ -140,3 +141,4 @@ export 'src/notification/notification_port.dart';
 
 // Exceptions
 export 'src/exceptions.dart';
+export 'src/licenses/open_source_licenses.dart';

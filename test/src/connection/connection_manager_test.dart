@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState;
 import 'package:mocktail/mocktail.dart';
 
+import 'package:appplayer_core/src/connection/shared_client.dart';
+
 import '../../helpers/mocks.dart';
 
 ServerConfig _server([String id = 's1']) => ServerConfig(
@@ -66,6 +68,10 @@ void main() {
       final info = m.getConnection('s1')!;
       expect(info.state, ConnectionState.error);
       expect(info.client, isNull);
+      // Cleared AND closed. Only clearing the reference left the socket open
+      // for the life of the process, and the reconnect below could not close it
+      // because by then there was no client to close.
+      verify(() => client.disconnect()).called(1);
 
       // reconnect() (what the health monitor calls) dials fresh under the same
       // id — the new client replaces the corpse and a session picks it up.
@@ -80,8 +86,8 @@ void main() {
         () async {
       final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
-      // First listResources (keepalive probe) throws → link is dead.
-      when(() => client.listResources())
+      // The keepalive ping throws with no reply behind it → link is dead.
+      when(() => client.ping())
           .thenThrow(StateError('transport gone'));
 
       final m = ConnectionManager(connector: (_) async => client);
@@ -99,13 +105,442 @@ void main() {
       // Dead probe → marked error + client cleared, ready for reconnect.
       expect(m.getConnection('ble1')!.state, ConnectionState.error);
       expect(m.getConnection('ble1')!.client, isNull);
+      verify(() => client.disconnect()).called(1);
+    });
+
+    test('TC-CONN-016: every keepalive miss on a tcp:// node closes the socket '
+        'it gives up on, so reconnect cycles do not pile up open sockets',
+        () async {
+      // The leak this guards against was measured on a real ESP32 node: each
+      // miss dropped the reference without closing it, the board's socket table
+      // filled, it began resetting new connections, and every reset was another
+      // miss. Three cycles here must close three clients, not zero.
+      final clients = <MockClient>[];
+      final m = ConnectionManager(connector: (_) async {
+        final c = MockClient();
+        when(() => c.disconnect()).thenReturn(null);
+        when(() => c.onDisconnect)
+            .thenAnswer((_) => const Stream<DisconnectReason>.empty());
+        when(() => c.ping()).thenThrow(StateError('board reset'));
+        clients.add(c);
+        return c;
+      });
+      final node = ServerConfig(
+        id: 'esp32.node',
+        name: 'ESP32 MCP Node',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://mcp-esp32.local:6270'},
+      );
+
+      await m.connect(node);
+      for (var i = 0; i < 3; i++) {
+        await m.keepAliveSweep();
+        expect(m.getConnection('esp32.node')!.state, ConnectionState.error);
+        await m.reconnect('esp32.node');
+      }
+
+      expect(clients, hasLength(4));
+      for (final c in clients.take(3)) {
+        verify(() => c.disconnect()).called(1);
+      }
+    });
+
+    test('TC-CONN-018: a keepalive probe that fails after its client was '
+        'replaced does not drop the replacement', () async {
+      // Measured on an ESP32 node: a slow probe outlived its client, the link
+      // was re-dialled meanwhile, and the stale probe then tore down the fresh,
+      // healthy connection — which started the whole cycle again.
+      final probe = Completer<void>();
+      final drops = StreamController<DisconnectReason>.broadcast();
+      addTearDown(drops.close);
+      final first = MockClient();
+      when(() => first.disconnect()).thenReturn(null);
+      when(() => first.onDisconnect).thenAnswer((_) => drops.stream);
+      when(() => first.ping()).thenAnswer((_) => probe.future);
+      final second = MockClient();
+      when(() => second.disconnect()).thenReturn(null);
+      when(() => second.onDisconnect)
+          .thenAnswer((_) => const Stream<DisconnectReason>.empty());
+      when(() => second.ping()).thenAnswer((_) async {});
+
+      var calls = 0;
+      final m = ConnectionManager(
+          connector: (_) async => ++calls == 1 ? first : second);
+      final node = ServerConfig(
+        id: 'esp32.node',
+        name: 'ESP32 MCP Node',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://mcp-esp32.local:6270'},
+      );
+      await m.connect(node);
+
+      final sweep = m.keepAliveSweep(timeout: const Duration(seconds: 5));
+      // The first link dies and is replaced while its probe is still pending.
+      drops.add(DisconnectReason.transportClosed);
+      await Future<void>.microtask(() {});
+      await m.reconnect('esp32.node');
+      expect((m.getConnection('esp32.node')!.client! as SharedClient).inner,
+          same(second));
+
+      probe.completeError(StateError('probe outlived its client'));
+      await sweep;
+
+      expect(m.getConnection('esp32.node')!.state, ConnectionState.connected);
+      expect((m.getConnection('esp32.node')!.client! as SharedClient).inner,
+          same(second));
+      verifyNever(() => second.disconnect());
+    });
+
+    test('TC-CONN-019: a sweep that starts while one is still running does not '
+        'probe again', () async {
+      final probe = Completer<void>();
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) => probe.future);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'tcp1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+      ));
+
+      final a = m.keepAliveSweep(timeout: const Duration(seconds: 5));
+      final b = m.keepAliveSweep(timeout: const Duration(seconds: 5));
+      probe.complete();
+      await Future.wait([a, b]);
+
+      verify(() => client.ping()).called(1);
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    // 23 §6.1.2 — anything the device sent is proof of life.
+    ServerConfig board() => ServerConfig(
+          id: 'tcp1',
+          name: 'board',
+          description: '',
+          transportType: TransportType.streamableHttp,
+          transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+        );
+
+    /// The handler the shared layer put on the inner client for resource
+    /// updates — calling it is the device streaming an update.
+    void Function() streamOf(MockClient inner) {
+      final handler = verify(() => inner.onNotification(
+              'notifications/resources/updated', captureAny()))
+          .captured
+          .last as Function(Map<String, dynamic>);
+      return () => handler({'uri': 'sensor://uptime'});
+    }
+
+    test('TC-CONN-030: a link that is streaming is not probed', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) => Completer<void>().future);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      final stream = streamOf(client);
+
+      for (var i = 0; i < 6; i++) {
+        stream(); // the device pushes an update
+        await m.keepAliveSweep(timeout: const Duration(seconds: 4));
+      }
+      verifyNever(() => client.ping());
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-031: a late probe on a link that is still sending is not a '
+        'miss — never dropped however many times it is late', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      late void Function() stream;
+      when(() => client.ping()).thenAnswer((_) {
+        // The probe waits; meanwhile the device streams an update.
+        Timer(const Duration(milliseconds: 5), () => stream());
+        return Completer<void>().future;
+      });
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      stream = streamOf(client);
+      const t = Duration(milliseconds: 20);
+
+      for (var i = 0; i < 6; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await m.keepAliveSweep(timeout: t);
+      }
+      verify(() => client.ping()).called(6);
+      verifyNever(() => client.disconnect());
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-032: a silent link is still dropped once the silence runs out',
+        () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) => Completer<void>().future);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      const t = Duration(milliseconds: 20);
+      const silence = Duration(milliseconds: 50);
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence);
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence);
+      expect(m.getConnection('tcp1')!.state, ConnectionState.error);
+    });
+
+    test('TC-CONN-033: the wait follows the device — a slow but steady device '
+        'is not judged by the floor', () async {
+      var call = 0;
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) async {
+        call++;
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      const t = Duration(milliseconds: 20);
+      for (var i = 0; i < 8; i++) {
+        await m.keepAliveSweep(timeout: t);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      expect(call, 8);
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-034: every connection is shared; a board has a fixed '
+        'surface and one request at a time, a borrowed device a fixed surface, '
+        'a general server neither (23 §6.1)', () async {
+      Future<ConnectionSharing> sharingOf(ServerConfig server) async {
+        final client = mockClient();
+        when(() => client.disconnect()).thenReturn(null);
+        final m = ConnectionManager(connector: (_) async => client);
+        await m.connect(server);
+        final held = m.getConnection(server.id)!.client;
+        expect(held, isA<SharedClient>());
+        return (held! as SharedClient).sharing;
+      }
+
+      final boardS = await sharingOf(board());
+      expect(boardS.surfaceFixed, isTrue);
+      expect(boardS.maxInFlight, 1);
+
+      final borrowed = await sharingOf(ServerConfig(
+        id: 'peer.d.app',
+        name: 'borrowed',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'peer://d/app'},
+      ));
+      expect(borrowed.surfaceFixed, isTrue);
+      expect(borrowed.maxInFlight, isNull);
+
+      final general = await sharingOf(_server());
+      expect(general.surfaceFixed, isFalse);
+      expect(general.maxInFlight, isNull);
+    });
+
+    test('TC-CONN-035: letting go is counted — the connection closes only '
+        'when its last holder releases (23 §6.1.4)', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      m.retain('tcp1', 'app');
+      m.retain('tcp1', 'lend:phone');
+      m.retain('tcp1', 'lend:phone'); // idempotent per holder
+
+      await m.release('tcp1', 'app'); // this host's screen closes
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected,
+          reason: 'a lent session still uses it');
+      verifyNever(() => client.disconnect());
+      expect(m.isHeld('tcp1'), isTrue);
+
+      await m.release('tcp1', 'lend:phone');
+      expect(m.hasConnection('tcp1'), isFalse);
+      verify(() => client.disconnect()).called(1);
+    });
+
+    test('TC-CONN-037: a reconnect replaces the connection; its holders stay',
+        () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      m.retain('tcp1', 'lend:phone');
+      await m.reconnect('tcp1');
+      expect(m.isHeld('tcp1'), isTrue);
+    });
+
+    test('TC-CONN-036: taking the device away closes it whoever holds it',
+        () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(board());
+      m.retain('tcp1', 'lend:phone');
+      await m.disconnect('tcp1');
+      expect(m.hasConnection('tcp1'), isFalse);
+      expect(m.isHeld('tcp1'), isFalse);
+    });
+
+    test('TC-CONN-020: missed probes keep the link while silence is shorter '
+        'than the limit — however many there are', () async {
+      // A board behind a lossy radio answers late while lwIP retransmits
+      // (1.5 s, 3 s, 6 s …). Counting four misses against a wait that had
+      // shrunk to 4.2 s dropped it; TCP would have delivered (2026-09-21).
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping())
+          .thenAnswer((_) => Completer<void>().future); // never answers
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'tcp1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+      ));
+      const t = Duration(milliseconds: 10);
+      const silence = Duration(milliseconds: 150);
+
+      for (var i = 1; i <= 6; i++) {
+        await m.keepAliveSweep(timeout: t, dropAfterSilence: silence);
+        expect(m.getConnection('tcp1')!.state, ConnectionState.connected,
+            reason: 'miss $i inside the silence limit');
+      }
+      verifyNever(() => client.disconnect());
+
+      await Future<void>.delayed(silence);
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence);
+      expect(m.getConnection('tcp1')!.state, ConnectionState.error,
+          reason: 'nothing at all for the whole limit is a dead link');
+    });
+
+    test('TC-CONN-021: an answer between two timeouts starts the silence again',
+        () async {
+      var call = 0;
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) {
+        call++;
+        return call == 2
+            ? Future<void>.value()
+            : Completer<void>().future;
+      });
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'tcp1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+      ));
+      const t = Duration(milliseconds: 20);
+      const silence = Duration(milliseconds: 90);
+
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence); // miss
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence); // answer
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      // Past the limit counted from the connect, inside it counted from the
+      // answer: the answer is what the silence is measured from.
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence); // miss
+
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-023: an answer that arrives after its probe timed out still '
+        'proves the link alive', () async {
+      // Measured: missed (4.0 s) → answer arrived at 7.9 s → missed (4.0 s) →
+      // answer at 4.4 s → dropped. Both "misses" were answered; the board was
+      // slow, not gone.
+      final answers = <Completer<void>>[];
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      when(() => client.ping()).thenAnswer((_) {
+        final c = Completer<void>();
+        answers.add(c);
+        return c.future;
+      });
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'tcp1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+      ));
+      const t = Duration(milliseconds: 20);
+      const silence = Duration(milliseconds: 60);
+
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence); // miss
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      answers.last.complete(); // …but it answers, late
+      await Future<void>.delayed(Duration.zero);
+      await m.keepAliveSweep(timeout: t, dropAfterSilence: silence); // miss again
+
+      expect(m.getConnection('tcp1')!.state, ConnectionState.connected);
+    });
+
+    test('TC-CONN-022: a device that answers ping with a JSON-RPC error is alive; '
+        'a failure with no reply behind it is not', () async {
+      // The ESP32 node never implemented ping and replies "Method not found"
+      // in 0.2 s — that is an answer. A transport failure carries no code.
+      Future<ConnectionState> after(Object error) async {
+        final client = mockClient();
+        when(() => client.disconnect()).thenReturn(null);
+        when(() => client.ping()).thenAnswer((_) => Future<void>.error(error));
+        final m = ConnectionManager(connector: (_) async => client);
+        await m.connect(ServerConfig(
+          id: 'tcp1',
+          name: 'board',
+          description: '',
+          transportType: TransportType.streamableHttp,
+          transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+        ));
+        await m.keepAliveSweep();
+        return m.getConnection('tcp1')!.state;
+      }
+
+      expect(await after(const McpError('Method not found', code: -32601)),
+          ConnectionState.connected);
+      expect(await after(const McpError('Transport error: socket closed')),
+          ConnectionState.error);
+    });
+
+    test('TC-CONN-017: a dead client that throws while closing still leaves '
+        'the entry marked for reconnect', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenThrow(StateError('already gone'));
+      when(() => client.ping()).thenThrow(StateError('transport gone'));
+
+      final m = ConnectionManager(connector: (_) async => client);
+      await m.connect(ServerConfig(
+        id: 'tcp1',
+        name: 'board',
+        description: '',
+        transportType: TransportType.streamableHttp,
+        transportConfig: const {'baseUrl': 'tcp://10.0.0.5:6270'},
+      ));
+
+      await m.keepAliveSweep();
+
+      // Tidying up is not the point of the handler: the health monitor still
+      // has to see an error entry, or the node is never reconnected.
+      expect(m.getConnection('tcp1')!.state, ConnectionState.error);
+      expect(m.getConnection('tcp1')!.client, isNull);
     });
 
     test('TC-CONN-015: keepAliveSweep skips plain http servers (no idle-drop, '
         'no noise poll)', () async {
       final client = mockClient();
       when(() => client.disconnect()).thenReturn(null);
-      when(() => client.listResources()).thenAnswer((_) async => const []);
+      when(() => client.ping()).thenAnswer((_) async {});
 
       final m = ConnectionManager(connector: (_) async => client);
       await m.connect(ServerConfig(
@@ -119,7 +554,7 @@ void main() {
       await m.keepAliveSweep();
 
       expect(m.getConnection('http1')!.state, ConnectionState.connected);
-      verifyNever(() => client.listResources());
+      verifyNever(() => client.ping());
     });
 
     test('TC-CONN-002: connect reuses existing connected', () async {

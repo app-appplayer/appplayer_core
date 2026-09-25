@@ -67,7 +67,8 @@ class ConnectionContinuity implements ContinuityController {
     _healthMonitor?.stopMonitoring();
     for (final info in live) {
       _paused[info.serverId] = ResumeCursor(serverConfig: info.serverConfig);
-      await _connections.disconnect(info.serverId);
+      // Paused, not left: whoever held the connection still does (23 §6.1.4).
+      await _connections.suspend(info.serverId);
     }
     _logger.info('continuity.paused', {'count': _paused.length});
   }

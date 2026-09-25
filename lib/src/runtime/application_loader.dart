@@ -9,6 +9,11 @@ import '../model/application_definition.dart';
 /// Page-loader closure accepted by `MCPUIRuntime.initialize`.
 typedef PageLoader = Future<Map<String, dynamic>> Function(String uri);
 
+/// Finds the client a page read should go through **now**. An open app outlives
+/// any one connection: a reconnect replaces the client, so a loader that holds
+/// the client it was built with keeps reading through a closed transport.
+typedef ClientResolver = Future<Client> Function();
+
 /// Discovers and loads application definitions from an MCP server
 /// (MOD-RUNTIME-002, FR-APP-001~003, FR-APP-ONLINE-001~005).
 class ApplicationLoader {
@@ -127,18 +132,44 @@ class ApplicationLoader {
   PageLoader pageLoaderFor(
     Client client, {
     Map<String, dynamic> Function(Map<String, dynamic>)? transform,
+  }) =>
+      resolvingPageLoader(() async => client, transform: transform);
+
+  /// Page loader that asks [resolve] for the client on every read.
+  ///
+  /// A read that fails is tried once more **only if the connection changed
+  /// underneath it** — the resolver hands back a different client (the old
+  /// transport dropped and a reconnect replaced it). A failure on a connection
+  /// that is still the same one is the server's answer and is not masked.
+  PageLoader resolvingPageLoader(
+    ClientResolver resolve, {
+    Map<String, dynamic> Function(Map<String, dynamic>)? transform,
   }) {
     return (String uri) async {
       _logger.debug('Loading page', {'uri': uri});
-      final page = await client.readResource(uri);
-      if (page.contents.isEmpty) return <String, dynamic>{};
-      final text = page.contents.first.text ?? '{}';
-      final decoded = jsonDecode(text);
-      final map = decoded is Map<String, dynamic>
-          ? decoded
-          : <String, dynamic>{};
-      return transform == null ? map : transform(map);
+      final first = await resolve();
+      try {
+        return await _readPage(first, uri, transform);
+      } catch (_) {
+        final current = await resolve();
+        if (identical(current, first)) rethrow;
+        _logger.info('Page read retried on the reconnected client', {'uri': uri});
+        return _readPage(current, uri, transform);
+      }
     };
+  }
+
+  Future<Map<String, dynamic>> _readPage(
+    Client client,
+    String uri,
+    Map<String, dynamic> Function(Map<String, dynamic>)? transform,
+  ) async {
+    final page = await client.readResource(uri);
+    if (page.contents.isEmpty) return <String, dynamic>{};
+    final text = page.contents.first.text ?? '{}';
+    final decoded = jsonDecode(text);
+    final map = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    return transform == null ? map : transform(map);
   }
 
   /// Page loader that serves [cache] entries from memory and falls back to the
@@ -156,8 +187,16 @@ class ApplicationLoader {
     Client client,
     Map<String, Map<String, dynamic>> cache, {
     Map<String, dynamic> Function(Map<String, dynamic>)? transform,
+  }) =>
+      cachingResolvingPageLoader(() async => client, cache, transform: transform);
+
+  /// [cachingPageLoaderFor] whose live reads go through [resolvingPageLoader].
+  PageLoader cachingResolvingPageLoader(
+    ClientResolver resolve,
+    Map<String, Map<String, dynamic>> cache, {
+    Map<String, dynamic> Function(Map<String, dynamic>)? transform,
   }) {
-    final base = pageLoaderFor(client, transform: transform);
+    final base = resolvingPageLoader(resolve, transform: transform);
     return (String uri) async {
       final cached = cache[uri];
       if (cached != null) {

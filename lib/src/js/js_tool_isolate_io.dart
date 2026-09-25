@@ -115,6 +115,7 @@ class JsToolIsolate {
         final verb = raw[#verb] as String;
         final args = (raw[#args] as List?)?.cast<Object?>() ??
             const <Object?>[];
+        final nonJson = NonJsonArgument.listFromWire(raw[#nonJson]);
         final dispatch = dispatcherRef.first;
         if (dispatch == null) {
           cmdPort.send(<Symbol, dynamic>{
@@ -128,7 +129,7 @@ class JsToolIsolate {
         // the dispatcher settles.
         Future<void>(() async {
           try {
-            final result = await dispatch(atom, verb, args);
+            final result = await dispatch(atom, verb, args, nonJson);
             cmdPort.send(<Symbol, dynamic>{
               #kind: _K.hostResolve,
               #uuid: uuid,
@@ -251,17 +252,24 @@ class JsToolIsolate {
 /// message taken), parked in a per-call slot, and read back with a synchronous
 /// evaluate once the Promise has settled. A string read synchronously comes
 /// back as itself on both engines. A value JSON cannot represent is an error.
+///
+/// [code] is one expression. A trailing `;` is dropped, and the closing
+/// parenthesis goes on its own line so a trailing `//` comment cannot swallow
+/// it. Code that does not parse as an expression is an error carrying the
+/// engine's message — reading the slot after a failed parse finds nothing and
+/// would hide why.
 Future<fjs.JsEvalResult> settleAsJson(
   fjs.JavascriptRuntime rt,
   String code,
   int id, {
   String? sourceUrl,
 }) async {
+  final expression = code.trimRight().replaceFirst(RegExp(r';+$'), '');
   final slot = 'globalThis.__mmSettled[$id]';
   const message = 'String((e && e.message) || e)';
   final pending = await rt.evaluateAsync(
     '(globalThis.__mmSettled = globalThis.__mmSettled || {}, '
-    'Promise.resolve().then(function () { return ($code); })'
+    'Promise.resolve().then(function () { return ($expression\n); })'
     '.then(function (v) { '
     'var s = JSON.stringify(v === undefined ? null : v); '
     '$slot = "ok:" + (s === undefined ? "null" : s); })'
@@ -269,6 +277,9 @@ Future<fjs.JsEvalResult> settleAsJson(
     '.then(function () { return 0; }))',
     sourceUrl: sourceUrl,
   );
+  if (pending.isError) {
+    return fjs.JsEvalResult(pending.stringResult, null, isError: true);
+  }
   await rt.handlePromise(pending);
   final read = rt.evaluate(
     '(function () { var s = $slot; delete $slot; return s; })()',
@@ -384,6 +395,7 @@ void _workerEntry(List<SendPort> ports) {
             #atom: parsed['atom']?.toString() ?? '',
             #verb: parsed['verb']?.toString() ?? '',
             #args: (parsed['args'] as List?) ?? const <dynamic>[],
+            #nonJson: (parsed['nonJson'] as List?) ?? const <dynamic>[],
           });
         });
         eventPort?.send(<Symbol, dynamic>{

@@ -1,6 +1,8 @@
 @TestOn('browser')
 library;
 
+import 'dart:convert';
+
 import 'package:appplayer_core/internals.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,12 +75,13 @@ void main() {
         allowedAtoms: {'probe'},
       );
 
-      final result = await isolate.evaluateAsync(
-        'host.probe.echo("a", 2).then(function(r) { return JSON.stringify(r); })',
-      );
+      final result = await isolate.evaluateAsync('host.probe.echo("a", 2)');
 
-      expect(result.isError, isFalse);
-      expect(result.stringResult, contains('"saw"'));
+      // evaluateAsync answers the resolved value as JSON (§4.7.1).
+      expect(result.isError, isFalse, reason: result.stringResult);
+      expect(jsonDecode(result.stringResult), {
+        'saw': ['a', 2],
+      });
       expect(atom.calls.single.$1, 'echo');
       expect(atom.calls.single.$2, ['a', 2]);
     });
@@ -104,6 +107,33 @@ void main() {
       final after = await isolate.evaluate('40 + 2');
       expect(after.isError, isFalse);
       expect(after.stringResult, '42');
+    });
+
+    test('an argument JSON cannot carry is refused and never reaches the atom',
+        () async {
+      final atom = _RecordingAtom('probe', (verb, args) => args);
+      await isolate.attachHostBridge(
+        atoms: [atom],
+        allowedAtoms: {'probe'},
+      );
+
+      final refused = await isolate.evaluateAsync(
+        'host.probe.echo("a", {n: NaN}).then('
+        '  function() { return "resolved"; },'
+        '  function(e) { return "rejected:" + e.message; })',
+      );
+      expect(refused.stringResult, contains('argument 1.n is NaN'));
+      expect(atom.calls, isEmpty);
+
+      final passed = await isolate.evaluateAsync(
+        'host.probe.echo([1, undefined], {skip: undefined}).then('
+        '  function(r) { return JSON.stringify(r); })',
+      );
+      expect(passed.isError, isFalse, reason: passed.stringResult);
+      expect(atom.calls.single.$2, [
+        [1, null],
+        <String, Object?>{},
+      ]);
     });
 
     test('an atom outside allowedAtoms is not exposed', () async {

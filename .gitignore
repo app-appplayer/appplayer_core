@@ -16,3 +16,7 @@ pubspec_overrides.yaml
 
 # Scratch output of the corpus gate: a bundle it stages before installing.
 tool/capability_probe/_corpus_build/
+
+# Python bytecode from tool/ scripts
+__pycache__/
+*.pyc

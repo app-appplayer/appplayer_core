@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 
+import 'js_bridge_protocol.dart' show NonJsonArgumentPolicy, defaultNonJsonRefusal;
 import 'js_tool_isolate.dart';
 import 'atom_category.dart';
 
@@ -65,10 +66,15 @@ class JsToolRuntime {
     await iso.attachHostBridge(
       atoms: atoms,
       allowedAtoms: allowedAtoms,
-      dispatch: (atomKey, verb, args) async {
+      dispatch: (atomKey, verb, args, nonJson) async {
         final atom = byKey[atomKey];
         if (atom == null) {
           throw ArgumentError('atom "$atomKey" not exposed to bundle');
+        }
+        if (nonJson.isNotEmpty) {
+          throw atom is NonJsonArgumentPolicy
+              ? (atom as NonJsonArgumentPolicy).refuseNonJson(verb, nonJson)
+              : defaultNonJsonRefusal(atomKey, verb, nonJson);
         }
         return atom.dispatch(verb, args);
       },

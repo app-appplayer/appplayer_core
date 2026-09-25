@@ -29,6 +29,12 @@ class ConnectionInfo {
   DateTime? connectedAt;
   String? error;
 
+  /// The last connect failed with an [AwaitsReachability] error: the endpoint
+  /// is known to be absent and something will say when it is back. Retrying
+  /// on a timer cannot succeed sooner, so the health monitor backs off even
+  /// for an app on screen and waits for a reachability hint (FR-HEALTH-011).
+  bool awaitsReachability = false;
+
   /// Subscription to the client's `onDisconnect` stream. Held so the manager
   /// can react to a transport that drops on its own (BLE supervision timeout,
   /// server close) and can cancel the listener on an explicit disconnect.
