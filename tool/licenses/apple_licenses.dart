@@ -21,6 +21,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'notices.dart';
+
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
     stderr.writeln('usage: apple_licenses.dart <app dir> [out json]');
@@ -119,11 +121,9 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  final entries = [
-    for (final e in byText.entries)
-      {'packages': (e.value.toList()..sort()), 'license': e.key},
-  ]..sort((a, b) => ((a['packages'] as List).first as String)
-      .compareTo((b['packages'] as List).first as String));
+  final entries = noticesFrom(byText);
+  final problem = noticeProblem(entries);
+  if (problem != null) _stop('${out.path} would be refused at registration $problem');
   out.parent.createSync(recursive: true);
   out.writeAsStringSync(const JsonEncoder.withIndent(' ').convert(entries));
   final count = entries.fold<int>(0, (n, e) => n + (e['packages'] as List).length);
@@ -178,17 +178,9 @@ List<(String, String)> _podNotices(File plist) {
   final r = Process.runSync(
       'plutil', ['-convert', 'json', '-o', '-', plist.path]);
   if (r.exitCode != 0) _stop('cannot read ${plist.path}');
-  final specs = ((jsonDecode(r.stdout as String) as Map)['PreferenceSpecifiers']
-          as List)
-      .cast<Map<String, dynamic>>();
-  return [
-    for (final s in specs)
-      if (s['Title'] is String &&
-          s['FooterText'] is String &&
-          (s['FooterText'] as String).trim().isNotEmpty &&
-          s['Title'] != 'Acknowledgements')
-        (s['Title'] as String, s['FooterText'] as String),
-  ];
+  return podNoticesFrom(
+      ((jsonDecode(r.stdout as String) as Map)['PreferenceSpecifiers'] as List)
+          .cast<Map<String, dynamic>>());
 }
 
 /// Every checkouts folder in DerivedData, whatever workspace made it.

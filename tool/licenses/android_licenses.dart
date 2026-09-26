@@ -26,6 +26,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'notices.dart';
+
 final _tools = File.fromUri(Platform.script).parent;
 
 Future<void> main(List<String> args) async {
@@ -142,11 +144,9 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  final entries = [
-    for (final e in byText.entries)
-      {'packages': (e.value.toList()..sort()), 'license': e.key},
-  ]..sort((a, b) => ((a['packages'] as List).first as String)
-      .compareTo((b['packages'] as List).first as String));
+  final entries = noticesFrom(byText);
+  final problem = noticeProblem(entries);
+  if (problem != null) _stop('${out.path} would be refused at registration $problem');
   out.parent.createSync(recursive: true);
   out.writeAsStringSync(const JsonEncoder.withIndent(' ').convert(entries));
   final count = entries.fold<int>(0, (n, e) => n + (e['packages'] as List).length);
