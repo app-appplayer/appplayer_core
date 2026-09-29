@@ -1,0 +1,14 @@
+{
+  "type": "page",
+  "state": {"initial": {"answer": {"from": "none"}}},
+  "content": {
+    "type": "linear",
+    "direction": "vertical",
+    "children": [
+      {"type": "text", "content": "scope a"},
+      {"type": "button", "label": "Ask",
+       "click": {"type": "tool", "tool": "board.summary", "params": {}, "bindResult": "answer"}},
+      {"type": "text", "content": "answered {{answer.from}}"}
+    ]
+  }
+}

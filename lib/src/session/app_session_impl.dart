@@ -195,6 +195,7 @@ class AppSessionImpl implements AppSession {
   Future<dynamic> _onToolCall(String tool, Map<String, dynamic> params) =>
       _tools.routerFor(
         _client,
+        scope: handle.source == AppSource.bundle ? handle.key : null,
         onNoClient: (t) => _logger.warn('session.tool.no_client', {
           'handle': handle.toString(),
           'tool': t,

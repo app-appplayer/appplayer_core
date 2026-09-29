@@ -1317,7 +1317,7 @@ class AppPlayerCoreService {
         // See the served path above: `onInit` runs before `buildUI`. A local
         // bundle has no client, so this resolves in-process tools only —
         // which is exactly what the session's router does for it too.
-        onToolCall: _toolDispatcher.routerFor(null),
+        onToolCall: _toolDispatcher.routerFor(null, scope: bundleId),
         pageLoader: definition.pageLoader,
         entry: launchEntry,
         identity: identity,
@@ -1463,8 +1463,11 @@ class AppPlayerCoreService {
         default:
           continue;
       }
-      _toolDispatcher.registerInProcessTool(t.name, handler);
-      registered.add(t.name);
+      // Isolated under the bundle (platform spec 04): two bundles may declare
+      // the same name. The bundle still calls it by the declared name.
+      final exposed = '$bundleId.${t.name}';
+      _toolDispatcher.registerInProcessTool(exposed, handler);
+      registered.add(exposed);
     }
     final jsEntries = tools.where((t) => t.kind == ToolKind.js).toList();
     if (jsEntries.isEmpty) {
@@ -1497,7 +1500,8 @@ class AppPlayerCoreService {
     final runtime = JsToolRuntime();
     final session = _sessions[bundleId];
     final atoms = <AtomCategory>[
-      McpAtom(_toolDispatcher, bridge: _bridge, session: session),
+      McpAtom(_toolDispatcher,
+          bridge: _bridge, session: session, scope: bundleId),
       if (_kernel != null)
         AgentAtom(_kernel!, bridge: _bridge, session: session),
       BundleAtom(bundle: bundle),
@@ -1566,7 +1570,7 @@ class AppPlayerCoreService {
         _logger.warn('JS tool entry evaluate threw', {'tool': t.name}, e);
         continue;
       }
-      final toolName = t.name;
+      final toolName = '$bundleId.${t.name}';
       _toolDispatcher.registerInProcessTool(toolName, (params) async {
         final call = '$fn(${jsonEncode(params)})';
         final r = await runtime.evaluateAsync(

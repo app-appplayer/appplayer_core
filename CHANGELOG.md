@@ -1,3 +1,9 @@
+## [0.2.2] - 2026-09-29
+
+### Fixed
+- A bundle's own tools (`manifest.tools.tools[]`, every kind) are registered as `<bundleId>.<name>`, as the platform spec's name isolation requires. They were registered under the bare declared name, so two bundles declaring the same name overwrote each other, and a bundle that called its tool by the full name — as bundles authored in Studio do — reached nothing.
+- Inside a bundle the declared name still reaches the bundle's own tool: the session's tool route, the local-bundle `initialize` route and `host.mcp.callTool` resolve a name in the calling bundle's namespace first (`ToolDispatcher.resolveInProcess`). The full name works from anywhere; outside a bundle the bare declared name no longer reaches another bundle's tool.
+
 ## [0.2.1] - 2026-09-26
 
 ### Fixed

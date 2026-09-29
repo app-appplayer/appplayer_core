@@ -16,7 +16,11 @@ import '../../runtime/tool_dispatcher.dart';
 import '../atom_category.dart';
 
 class McpAtom extends AtomCategory {
-  McpAtom(this._dispatcher, {this.bridge, this.session});
+  McpAtom(this._dispatcher, {this.bridge, this.session, this.scope});
+
+  /// The bundle whose js calls this atom. Its own tools answer to the names
+  /// it declared (`ToolDispatcher.resolveInProcess`).
+  final String? scope;
 
   final ToolDispatcher _dispatcher;
 
@@ -36,8 +40,7 @@ class McpAtom extends AtomCategory {
   List<AtomVerb> get verbs => const [
         AtomVerb(
           'callTool',
-          description:
-              'Invoke a registered host MCP tool. (toolName, args) → '
+          description: 'Invoke a registered host MCP tool. (toolName, args) → '
               '{isError, body}.',
         ),
         AtomVerb(
@@ -57,8 +60,7 @@ class McpAtom extends AtomCategory {
         if (toolName is! String || toolName.isEmpty) {
           throw ArgumentError('toolName must be a non-empty String');
         }
-        final toolArgs =
-            args.length > 1 ? args[1] : const <String, dynamic>{};
+        final toolArgs = args.length > 1 ? args[1] : const <String, dynamic>{};
         if (toolArgs is! Map) {
           throw ArgumentError('args must be an object map');
         }
@@ -67,9 +69,11 @@ class McpAtom extends AtomCategory {
           final b = bridge;
           final s = session;
           final result = (b != null && s != null)
-              ? await b.runScoped(s,
-                  () => _dispatcher.callInProcess(toolName, params))
-              : await _dispatcher.callInProcess(toolName, params);
+              ? await b.runScoped(
+                  s,
+                  () =>
+                      _dispatcher.callInProcess(toolName, params, scope: scope))
+              : await _dispatcher.callInProcess(toolName, params, scope: scope);
           // The in-process result is already a decoded Map / List /
           // primitive (the shape returned by `ToolDispatcher.callInProcess`).
           // Wrap it in the JS-side `{isError, body}` envelope contract.

@@ -49,14 +49,32 @@ class ToolDispatcher {
   /// Names of every currently-registered in-process tool.
   List<String> get inProcessToolNames => List.unmodifiable(_inProcess.keys);
 
+  /// The registered name [tool] reaches when called from inside [scope].
+  ///
+  /// A bundle's own tools are registered as `<bundleId>.<name>` (platform
+  /// spec 04 name isolation), and the bundle calls them by the name it
+  /// declared: the id it runs under can be chosen at install, so it cannot
+  /// write its own full name. Inside a bundle the short name is tried in that
+  /// bundle's namespace first; the full name, and any tool outside the bundle,
+  /// resolve as written. Null when nothing is registered under either.
+  String? resolveInProcess(String tool, {String? scope}) {
+    if (scope != null && scope.isNotEmpty) {
+      final own = '$scope.$tool';
+      if (_inProcess.containsKey(own)) return own;
+    }
+    return _inProcess.containsKey(tool) ? tool : null;
+  }
+
   /// Dispatch a registered tool entirely in-process, with no external
   /// MCP client involved. Used by JS atoms such as `host.mcp.callTool`.
   /// Throws `ToolNotFoundException` for unregistered tool names.
   Future<dynamic> callInProcess(
     String tool,
-    Map<String, dynamic> params,
-  ) async {
-    final handler = _inProcess[tool];
+    Map<String, dynamic> params, {
+    String? scope,
+  }) async {
+    final name = resolveInProcess(tool, scope: scope);
+    final handler = name == null ? null : _inProcess[name];
     if (handler == null) {
       throw ToolNotFoundException(tool, _inProcess.keys.toList());
     }
@@ -78,9 +96,10 @@ class ToolDispatcher {
   /// that did not happen.
   Future<dynamic> _callInProcessForRuntime(
     String tool,
-    Map<String, dynamic> params,
-  ) async {
-    final result = await callInProcess(tool, params);
+    Map<String, dynamic> params, {
+    String? scope,
+  }) async {
+    final result = await callInProcess(tool, params, scope: scope);
     if (result is Map && result['ok'] == false) {
       return <String, dynamic>{
         'content': <Map<String, dynamic>>[
@@ -99,14 +118,18 @@ class ToolDispatcher {
   /// definition-level `onInit` tool call has somewhere to land (MCP UI DSL
   /// §1.5.2 fires that hook ahead of the first render), and again at
   /// `buildUI` for everything after. Two copies of it would drift.
+  ///
+  /// [scope] is the bundle the calls come from, so its own tools answer to the
+  /// names it declared ([resolveInProcess]).
   Future<dynamic> Function(String, Map<String, dynamic>) routerFor(
     Client? client, {
     void Function(String tool)? onNoClient,
+    String? scope,
   }) {
     return (String tool, Map<String, dynamic> params) async {
       if (client == null) {
-        if (_inProcess.containsKey(tool)) {
-          return _callInProcessForRuntime(tool, params);
+        if (resolveInProcess(tool, scope: scope) != null) {
+          return _callInProcessForRuntime(tool, params, scope: scope);
         }
         onNoClient?.call(tool);
         // Not `null`: the runtime reads a null return as a successful call
@@ -117,7 +140,7 @@ class ToolDispatcher {
           cause: StateError('no tool named "$tool" and no connected server'),
         );
       }
-      return call(client: client, tool: tool, params: params);
+      return call(client: client, tool: tool, params: params, scope: scope);
     };
   }
 
@@ -125,13 +148,14 @@ class ToolDispatcher {
     required Client client,
     required String tool,
     required Map<String, dynamic> params,
+    String? scope,
   }) async {
     _logger.debug('Tool call', {'tool': tool, 'params': params});
 
     // Try in-process first. If the tool is registered we skip the
     // external MCP forward and resolve it directly.
-    if (_inProcess.containsKey(tool)) {
-      return _callInProcessForRuntime(tool, params);
+    if (resolveInProcess(tool, scope: scope) != null) {
+      return _callInProcessForRuntime(tool, params, scope: scope);
     }
 
     final List<Tool> tools;
@@ -157,8 +181,8 @@ class ToolDispatcher {
       throw ToolExecutionException(tool, cause: e);
     }
 
-    _logger.debug('Tool result',
-        {'tool': tool, 'items': result.content.length});
+    _logger
+        .debug('Tool result', {'tool': tool, 'items': result.content.length});
 
     if (result.content.isEmpty) return null;
     final first = result.content.first;
@@ -167,10 +191,13 @@ class ToolDispatcher {
     try {
       return jsonDecode(first.text);
     } catch (e) {
-      _logger.warn('Failed to parse tool response', {
-        'tool': tool,
-        'text': first.text,
-      }, e);
+      _logger.warn(
+          'Failed to parse tool response',
+          {
+            'tool': tool,
+            'text': first.text,
+          },
+          e);
       return null;
     }
   }

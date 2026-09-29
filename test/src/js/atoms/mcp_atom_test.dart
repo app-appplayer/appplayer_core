@@ -29,6 +29,20 @@ void main() {
       expect(out['body'], <String, dynamic>{'k': 1});
     });
 
+    test('a bundle\'s js reaches its own tool by the declared name', () async {
+      // Bundle tools are registered under the bundle id (platform spec 04);
+      // the js that ships in the bundle calls the name it declared.
+      dispatcher
+        ..registerInProcessTool('bundle.a.board.summary', (_) async => 'a')
+        ..registerInProcessTool('bundle.b.board.summary', (_) async => 'b');
+      final fromA = await McpAtom(dispatcher, scope: 'bundle.a')
+          .dispatch('callTool', ['board.summary']) as Map;
+      final fromB = await McpAtom(dispatcher, scope: 'bundle.b')
+          .dispatch('callTool', ['board.summary']) as Map;
+      expect(fromA['body'], 'a');
+      expect(fromB['body'], 'b');
+    });
+
     test('callTool defaults args to {} when omitted', () async {
       Map<String, dynamic>? captured;
       dispatcher.registerInProcessTool('echo', (params) async {

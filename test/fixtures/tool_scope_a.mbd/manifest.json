@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0.0",
+  "manifest": {
+    "id": "com.example.tool_scope_a",
+    "name": "Tool Scope a",
+    "version": "1.0.0",
+    "schemaVersion": "1.0.0",
+    "type": "application",
+    "entryPoint": "ui.app"
+  },
+  "tools": {
+    "schemaVersion": "1.0.0",
+    "tools": [
+      {
+        "name": "board.summary",
+        "description": "Which bundle answered.",
+        "kind": "js",
+        "target": {"entry": "tools/board.js", "fn": "summary"},
+        "inputSchema": {"type": "object", "properties": {}}
+      }
+    ]
+  }
+}

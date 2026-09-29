@@ -1,0 +1,1 @@
+{"type": "application", "title": "Tool Scope b", "routes": {"/": "ui://pages/home"}, "initialRoute": "/", "version": "1.4"}
