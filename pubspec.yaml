@@ -23,8 +23,8 @@ dependencies:
   # `kind: cloud` bundle tools POST their input to an HTTPS endpoint (bundle
   # spec §4.6). Web-safe client.
   http: ^1.6.0
-  flutter_mcp_ui_core: ^0.6.7
-  flutter_mcp_ui_runtime: ^0.8.2
+  flutter_mcp_ui_core: ^0.6.9
+  flutter_mcp_ui_runtime: ^0.8.4
   mcp_bundle: ^0.4.10
   # brain_kernel — drives the bundle's 8 knowledge/tool categories. The
   # core auto-creates a BundleActivation and registers it with the

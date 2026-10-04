@@ -1,0 +1,22 @@
+{
+  "type": "page",
+  "content": {
+    "type": "linear",
+    "direction": "vertical",
+    "children": [
+      {
+        "type": "text",
+        "content": "A TAB HOME"
+      },
+      {
+        "type": "button",
+        "label": "A GO",
+        "onTap": {
+          "type": "navigation",
+          "action": "push",
+          "route": "/next"
+        }
+      }
+    ]
+  }
+}

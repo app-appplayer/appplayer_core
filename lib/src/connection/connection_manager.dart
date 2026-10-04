@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState, Logger;
 
 import '../logging/logger.dart';
@@ -9,6 +10,7 @@ import 'awaits_reachability.dart';
 import 'connection_info.dart';
 import 'connection_result.dart';
 import 'connection_state.dart';
+import 'serving_authorization.dart';
 import 'shared_client.dart';
 import 'transport_factory.dart';
 
@@ -30,6 +32,49 @@ typedef ClientConnector = Future<Client> Function(TransportConfig transport);
 /// hook are affected — hand-typed URLs, discovered boards (tcp/ble/serial) and
 /// no-auth servers are untouched.
 typedef ServerReGrant = Future<ServerConfig?> Function(ServerConfig stale);
+
+/// Connects a streamable-HTTP server whose requests carry host-answered
+/// credentials. Injected in tests; the default builds the protocol client on
+/// the transport directly, the one place a per-request header provider and an
+/// observing HTTP client can be handed in.
+typedef AuthorizedConnector = Future<Client> Function(
+  StreamableHttpTransportConfig transport,
+  RequestHeadersProvider headers,
+  http.Client httpClient,
+);
+
+Future<Client> _defaultAuthorizedConnector(
+  StreamableHttpTransportConfig transport,
+  RequestHeadersProvider headers,
+  http.Client httpClient,
+) async {
+  final config = McpClient.simpleConfig(
+    name: 'AppPlayer Client',
+    version: '1.0.0',
+  );
+  final client = McpClient.createClient(config);
+  final connection = await StreamableHttpClientTransport.create(
+    baseUrl: transport.baseUrl,
+    headers: transport.headers,
+    headersProvider: headers,
+    timeout: transport.timeout,
+    maxConcurrentRequests: transport.maxConcurrentRequests,
+    useHttp2: transport.useHttp2,
+    httpClient: httpClient,
+    terminateOnClose: transport.terminateOnClose,
+  );
+  await client.connectWithRetry(
+    connection,
+    maxRetries: config.maxRetries,
+    delay: config.retryDelay,
+  );
+  return client;
+}
+
+bool _isHttp(String url) {
+  final scheme = Uri.tryParse(url)?.scheme.toLowerCase();
+  return scheme == 'http' || scheme == 'https';
+}
 
 Future<Client> _defaultConnector(TransportConfig transport) async {
   final config = McpClient.simpleConfig(
@@ -53,11 +98,14 @@ class ConnectionManager extends ChangeNotifier {
     Logger? logger,
     TransportFactory? transportFactory,
     ClientConnector? connector,
+    AuthorizedConnector? authorizedConnector,
     Duration? waitCheckInterval,
     Duration? waitMaxDuration,
   })  : _logger = logger ?? NoopLogger(),
         _transportFactory = transportFactory ?? const TransportFactory(),
         _connector = connector ?? _defaultConnector,
+        _authorizedConnector =
+            authorizedConnector ?? _defaultAuthorizedConnector,
         _waitCheckInterval =
             waitCheckInterval ?? const Duration(milliseconds: 100),
         _waitMaxDuration = waitMaxDuration ?? const Duration(seconds: 30);
@@ -65,6 +113,21 @@ class ConnectionManager extends ChangeNotifier {
   final Logger _logger;
   final TransportFactory _transportFactory;
   final ClientConnector _connector;
+  final AuthorizedConnector _authorizedConnector;
+
+  /// The host's answer to credentials for served addresses (see
+  /// [ServingAuthorization]). Null = connections carry only what their
+  /// [ServerConfig] says, byte-for-byte as before.
+  ServingAuthorization? servingAuthorization;
+
+  /// Other headers the host sends to served addresses (see [ServingHeaders]).
+  ServingHeaders? servingHeaders;
+
+  /// The person's language, when the host knows it better than the device —
+  /// a tier with its own language setting answers it (FR-CONN-011). Asked when
+  /// a connection is made; a null hook or a null answer sends the device's
+  /// languages.
+  String? Function()? requestLanguage;
   final Duration _waitCheckInterval;
   final Duration _waitMaxDuration;
   final Map<String, ConnectionInfo> _connections = {};
@@ -87,11 +150,9 @@ class ConnectionManager extends ChangeNotifier {
   /// its binding. Whoever owns that state re-attaches here.
   void Function(String serverId, Client client)? onClientAttached;
 
-  Map<String, ConnectionInfo> get connections =>
-      Map.unmodifiable(_connections);
+  Map<String, ConnectionInfo> get connections => Map.unmodifiable(_connections);
 
-  bool hasConnection(String serverId) =>
-      _connections.containsKey(serverId);
+  bool hasConnection(String serverId) => _connections.containsKey(serverId);
 
   ConnectionInfo? getConnection(String serverId) => _connections[serverId];
 
@@ -113,8 +174,7 @@ class ConnectionManager extends ChangeNotifier {
         return ConnectionResult.success(existing);
       }
       if (existing.state == ConnectionState.connecting) {
-        _logger.debug('Awaiting in-flight connection',
-            {'serverId': server.id});
+        _logger.debug('Awaiting in-flight connection', {'serverId': server.id});
         return _waitForConnection(server.id);
       }
     }
@@ -130,11 +190,56 @@ class ConnectionManager extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final transport = _transportFactory.create(server);
+      final transport = _transportFactory.create(
+        server,
+        acceptLanguage: requestLanguage?.call() ??
+            acceptLanguageOf(PlatformDispatcher.instance.locales),
+      );
+      final auth = servingAuthorization;
+      final extra = servingHeaders;
+      final Client connected;
+      UnauthorizedHandler? onUnauthorized;
+      // Credentials are an HTTP matter. A board-wire address (tcp / ble /
+      // serial on a streamable-HTTP config) is a device the host's connector
+      // dials; it has no request to put a header on (FR-CONN-012).
+      if ((auth != null || extra != null) &&
+          transport is StreamableHttpTransportConfig &&
+          _isHttp(transport.baseUrl)) {
+        // The host is asked before every request, so a person who signs in
+        // mid-session is carried by the next call without reconnecting.
+        final endpoint = Uri.parse(transport.baseUrl);
+        final recorder = ChallengeRecordingClient();
+        connected = await _authorizedConnector(
+          transport,
+          (request) async {
+            final url = Uri.parse(request.url);
+            final header = await auth?.authorizationFor(url);
+            return <String, String>{
+              if (extra != null) ...await extra.headersFor(url),
+              if (header != null) 'Authorization': header,
+            };
+          },
+          recorder,
+        );
+        if (auth != null) {
+          onUnauthorized = () async =>
+              await auth.afterUnauthorized(
+                endpoint,
+                wwwAuthenticate: recorder.takeChallenge(),
+              ) !=
+              null;
+        }
+      } else {
+        connected = await _connector(transport);
+      }
       // One connection, many consumers: this host's screens and whoever it
       // lends the connection to. Whatever the connector built is shared through
       // one layer, so the device does not feel them (23 §6.1).
-      final client = SharedClient(await _connector(transport), _sharingFor(server));
+      final client = SharedClient(
+        connected,
+        _sharingFor(server),
+        onUnauthorized: onUnauthorized,
+      );
       info.client = client;
       info.state = ConnectionState.connected;
       info.connectedAt = DateTime.now();
@@ -250,8 +355,8 @@ class ConnectionManager extends ChangeNotifier {
     try {
       dead?.disconnect();
     } catch (e, st) {
-      _logger.logError('Closing a dropped client failed', e, st,
-          {'serverId': serverId});
+      _logger.logError(
+          'Closing a dropped client failed', e, st, {'serverId': serverId});
     }
     info.state = ConnectionState.error;
     info.error = 'transport dropped: $reason';
@@ -435,12 +540,13 @@ class ConnectionManager extends ChangeNotifier {
 
   void _recordProbe(String serverId, Duration took) {
     final prev = _probeRtt[serverId];
-    _probeRtt[serverId] =
-        prev == null ? took : Duration(microseconds: (prev.inMicroseconds * 7 + took.inMicroseconds) ~/ 8);
+    _probeRtt[serverId] = prev == null
+        ? took
+        : Duration(
+            microseconds: (prev.inMicroseconds * 7 + took.inMicroseconds) ~/ 8);
   }
 
   static const Duration _probeLimitCeiling = Duration(seconds: 20);
-
 
   /// How long a link may send nothing at all before it is called dead.
   ///
@@ -552,8 +658,7 @@ class ConnectionManager extends ChangeNotifier {
       try {
         info.client?.disconnect();
       } catch (e) {
-        _logger.warn('Disconnect error',
-            {'serverId': info.serverId}, e);
+        _logger.warn('Disconnect error', {'serverId': info.serverId}, e);
       }
     }
     _connections.clear();
@@ -577,8 +682,7 @@ class ConnectionManager extends ChangeNotifier {
     // fakeAsync in tests.
     final maxIterations = _waitCheckInterval.inMilliseconds == 0
         ? 1
-        : _waitMaxDuration.inMilliseconds ~/
-            _waitCheckInterval.inMilliseconds;
+        : _waitMaxDuration.inMilliseconds ~/ _waitCheckInterval.inMilliseconds;
 
     for (var i = 0; i < maxIterations; i++) {
       final info = _connections[serverId];
@@ -589,8 +693,7 @@ class ConnectionManager extends ChangeNotifier {
         return ConnectionResult.success(info);
       }
       if (info.state == ConnectionState.error) {
-        return ConnectionResult.failure(
-            info.error ?? 'Connection failed');
+        return ConnectionResult.failure(info.error ?? 'Connection failed');
       }
       await Future<void>.delayed(_waitCheckInterval);
     }

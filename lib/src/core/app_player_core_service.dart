@@ -61,6 +61,7 @@ import '../connection/connection_health_monitor.dart';
 import '../connection/connection_info.dart';
 import '../connection/connection_result.dart';
 import '../connection/connection_manager.dart';
+import '../connection/serving_authorization.dart';
 import '../connection/connection_state.dart';
 import '../debug/debug_capture.dart';
 import '../debug/debug_mcp_host.dart';
@@ -185,8 +186,7 @@ class AppPlayerCoreService {
   CapabilityConsentManager? _consent;
   KernelApp? _kernel;
   BundleSessionBridge? _bridge;
-  final Map<String, DispatchSession> _sessions =
-      <String, DispatchSession>{};
+  final Map<String, DispatchSession> _sessions = <String, DispatchSession>{};
 
   // Debug MCP surface (FR-DEBUG). Desktop-only, settings-gated — created
   // in [initialize] only when `enableDebugMcp` is set AND the platform is
@@ -312,8 +312,7 @@ class AppPlayerCoreService {
     Map<String, Future<Object?> Function(Map<String, dynamic>)> tools,
   ) {
     _assertReady();
-    final adapted =
-        <String, Future<dynamic> Function(Map<String, dynamic>)>{};
+    final adapted = <String, Future<dynamic> Function(Map<String, dynamic>)>{};
     for (final entry in tools.entries) {
       adapted[entry.key] =
           (Map<String, dynamic> args) async => entry.value(args);
@@ -338,9 +337,7 @@ class AppPlayerCoreService {
   /// Profile. Set by [useKernelDefinitionResolver] alongside the resolver,
   /// because a host that can render another origin's UI but not act on it
   /// ships a screen that looks finished and does nothing.
-  Future<dynamic> Function(
-      Map<String, dynamic> origin,
-      String tool,
+  Future<dynamic> Function(Map<String, dynamic> origin, String tool,
       Map<String, dynamic> params)? _originToolCaller;
 
   /// Watches a resource on a named origin — the live half. Set alongside the
@@ -361,7 +358,8 @@ class AppPlayerCoreService {
   /// claim the Composition Profile. Exposed so a host (or its tests) can
   /// verify its own claim and drive the exact production resolution path
   /// rather than a parallel one.
-  Future<Map<String, dynamic>> Function(String ref, Map<String, dynamic> origin)?
+  Future<Map<String, dynamic>> Function(
+          String ref, Map<String, dynamic> origin)?
       get definitionResolver => _definitionResolver;
 
   /// Register the resolver that backs multi-origin composition — one bundle
@@ -380,7 +378,8 @@ class AppPlayerCoreService {
   /// the kernel's outbound `mcp.*` surface. It is opt-in so a host with no
   /// outbound client stays non-composing.
   void registerDefinitionResolver(
-    Future<Map<String, dynamic>> Function(String ref, Map<String, dynamic> origin)
+    Future<Map<String, dynamic>> Function(
+            String ref, Map<String, dynamic> origin)
         resolve,
   ) {
     _definitionResolver = resolve;
@@ -561,6 +560,15 @@ class AppPlayerCoreService {
     CredentialVault? credentialVault,
     HealthMonitorConfig? healthConfig,
     ValueListenable<Brightness>? hostBrightness,
+    // Credentials for served addresses whose calls need a person (see
+    // [ServingAuthorization]). Null = connections carry only their config.
+    ServingAuthorization? servingAuthorization,
+    // Other headers for served addresses (see [ServingHeaders]) — an anonymous
+    // visitor id. Null = none.
+    ServingHeaders? servingHeaders,
+    // The person's language for served addresses, when the host has its own
+    // language setting. Null = the device's languages (FR-CONN-011).
+    String? Function()? requestLanguage,
     RuntimeCapabilities runtimeCapabilities = RuntimeCapabilities.none,
     McpLogMessageHandler? onMcpLogMessage,
     SettingsStore? settingsStore,
@@ -606,11 +614,15 @@ class AppPlayerCoreService {
     _kbRecords = KvKbRecordStore(_kv);
     _appIdOf = appIdOf;
     _kbAccountOf = kbAccountRecords;
-    _conn = ConnectionManager(logger: _logger, connector: _testConnector);
+    _conn = ConnectionManager(logger: _logger, connector: _testConnector)
+      ..servingAuthorization = servingAuthorization
+      ..servingHeaders = servingHeaders
+      ..requestLanguage = requestLanguage;
     // UI DSL §6.13 — the platform powers this host can actually perform. A
     // tier that wires none is still conformant: every affected widget reports
     // the absence instead of drawing a facsimile of it working.
-    _runtime = RuntimeManager(logger: _logger, capabilities: runtimeCapabilities);
+    _runtime =
+        RuntimeManager(logger: _logger, capabilities: runtimeCapabilities);
     _appLoader = ApplicationLoader(logger: _logger);
     _toolDispatcher = ToolDispatcher(logger: _logger);
     _resourceSub = ResourceSubscriber(logger: _logger);
@@ -691,8 +703,8 @@ class AppPlayerCoreService {
     // is looking at it and the open app is itself the statement that this
     // connection is supposed to exist. Only the full-screen app counts; a
     // dashboard summary tile does not (see `isEngaged`).
-    _health.isEngaged = (serverId) =>
-        _runtime.getRuntime(AppHandle.server(serverId)) != null;
+    _health.isEngaged =
+        (serverId) => _runtime.getRuntime(AppHandle.server(serverId)) != null;
     _health.startMonitoring();
 
     // Platform integration foundation (FR-PLATFORM). Ports default to NoOp;
@@ -772,7 +784,8 @@ class AppPlayerCoreService {
       if (clientHost != null) {
         tools.addAll(clientTools(clientHost));
       }
-      final adapted = <String, Future<dynamic> Function(Map<String, dynamic>)>{};
+      final adapted =
+          <String, Future<dynamic> Function(Map<String, dynamic>)>{};
       for (final entry in tools.entries) {
         adapted[entry.key] = (Map<String, dynamic> args) async {
           return entry.value(args);
@@ -917,8 +930,8 @@ class AppPlayerCoreService {
       // List first (reveals whether ui://app/info exists), then read it with a
       // retry when it is listed. No runtime, no UI — this is metadata-only.
       final resources = await client.listResources();
-      final infoListed = resources
-          .any((r) => r.uri == AppMetadataProvider.wellKnownUri);
+      final infoListed =
+          resources.any((r) => r.uri == AppMetadataProvider.wellKnownUri);
       final metadata = await _metadataProvider.fetchFromServer(
         client,
         serverId,
@@ -1055,8 +1068,8 @@ class AppPlayerCoreService {
       // stream not ready) — retry with a short backoff instead of giving up
       // after one shot. Unlisted → single best-effort attempt (a server may
       // serve it without listing, but don't hammer one that simply lacks it).
-      final infoListed = resources
-          .any((r) => r.uri == AppMetadataProvider.wellKnownUri);
+      final infoListed =
+          resources.any((r) => r.uri == AppMetadataProvider.wellKnownUri);
       metadata = await _metadataProvider.fetchFromServer(
         client,
         serverId,
@@ -1200,15 +1213,19 @@ class AppPlayerCoreService {
       bundle: servedBundle,
       jsRuntime: jsState?.runtime,
       jsToolNames: jsState?.toolNames ?? const <String>[],
-      onClose: servedBundleId == null
-          ? null
-          : () async {
-              final id = servedBundleId!;
-              await _closeBundleConnections(jsState);
-              final session = _sessions.remove(id);
-              if (session != null) await _bridge?.closeSession(session);
-              await _kernel?.deactivate(id);
-            },
+      onClose: () async {
+        final id = servedBundleId;
+        if (id != null) {
+          await _closeBundleConnections(jsState);
+          final session = _sessions.remove(id);
+          if (session != null) await _bridge?.closeSession(session);
+          await _kernel?.deactivate(id);
+        }
+        // Closing the session is the screen letting go, exactly as closeApp
+        // does: a single-peer device stays reachable for the next host only if
+        // a screen that left releases its hold (23 §6.1.4).
+        await _conn.release(serverId, _appHolder);
+      },
     );
   }
 
@@ -1269,7 +1286,8 @@ class AppPlayerCoreService {
     );
   }
 
-  Future<AppSession> _openFromBundleImpl(McpBundle bundle, TrustLevel trustLevel,
+  Future<AppSession> _openFromBundleImpl(
+      McpBundle bundle, TrustLevel trustLevel,
       [EntryContext? launchEntry,
       IdentityContext? identity,
       String? launchRoute]) async {
@@ -1516,9 +1534,7 @@ class AppPlayerCoreService {
     // security policies (Standard / Pro) are layered on top later
     // (atoms registry hardening lands separately).
     final required = bundle.requires?.builtinAtoms ?? const <String>[];
-    final allowed = required.isEmpty
-        ? atoms.map((a) => a.key)
-        : required;
+    final allowed = required.isEmpty ? atoms.map((a) => a.key) : required;
     try {
       await runtime.attachHostBridge(atoms: atoms, allowedAtoms: allowed);
     } catch (e) {
@@ -1696,8 +1712,10 @@ class AppPlayerCoreService {
     if (_runtime.getRuntime(
             DashboardOrchestrator.deviceSummaryRuntimeHandle(serverId)) !=
         null) {
-      _logger.info('Server app released; connection kept for its consumers',
-          {'serverId': serverId, 'consumers': const ['dashboard']});
+      _logger.info('Server app released; connection kept for its consumers', {
+        'serverId': serverId,
+        'consumers': const ['dashboard']
+      });
       return false;
     }
     final adopted = <KernelClientConnection>[
@@ -1707,13 +1725,13 @@ class AppPlayerCoreService {
       try {
         await connection.close();
       } catch (e, st) {
-        _logger.logError('Closing a kernel adoption failed', e, st,
-            {'serverId': serverId});
+        _logger.logError(
+            'Closing a kernel adoption failed', e, st, {'serverId': serverId});
       }
     }
     await _conn.disconnect(serverId);
-    _logger.info('Server app released with its connection',
-        {'serverId': serverId});
+    _logger.info(
+        'Server app released with its connection', {'serverId': serverId});
     return true;
   }
 
@@ -1956,8 +1974,7 @@ class AppPlayerCoreService {
     final engaged = _health.isEngaged;
     if (engaged == null) return const {};
     return _conn.connections.entries
-        .where((e) =>
-            e.value.state == ConnectionState.error && engaged(e.key))
+        .where((e) => e.value.state == ConnectionState.error && engaged(e.key))
         .map((e) => e.key)
         .toSet();
   }

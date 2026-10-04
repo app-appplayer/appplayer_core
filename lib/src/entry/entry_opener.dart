@@ -10,6 +10,7 @@ import '../bundle/bundle_ref.dart';
 import '../core/app_player_core_service.dart';
 import '../model/server_config.dart';
 import '../session/app_session.dart';
+import '../exceptions.dart';
 import 'entry_target.dart';
 
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart'
@@ -30,6 +31,19 @@ class EntryOpenUnsupported implements Exception {
 
   @override
   String toString() => 'EntryOpenUnsupported(${kind.wireName}): $reason';
+}
+
+/// The entry names something this device does not have installed.
+///
+/// Distinct from a failure to load: the target is fine and the answer is to
+/// acquire it, so a host shows a way to get it rather than the loader's error.
+class EntryTargetNotInstalled implements Exception {
+  EntryTargetNotInstalled(this.kind, this.ref);
+  final EntryTargetKind kind;
+  final String ref;
+
+  @override
+  String toString() => 'EntryTargetNotInstalled(${kind.wireName}): $ref';
 }
 
 /// Turns a resolved target into an open session.
@@ -69,18 +83,25 @@ class EntryOpener {
         // The node proves itself through discovery + probe (17); the entry
         // code vouches for nothing about it.
         final serverId = await resolve(target.ref);
-        return _core.openAppFromServer(serverId, entry: entry,
-            identity: identity);
+        return _core.openAppFromServer(serverId,
+            entry: entry, identity: identity);
 
       case EntryTargetKind.bundle:
         // Acquisition is a separate act (install ≠ run): by the time an entry
         // opens a bundle it is already installed, and this only renders it
         // with the entry attached.
-        return _core.openAppFromBundle(
-          BundleInstalledRef(target.ref),
-          entry: entry,
-          identity: identity,
-        );
+        try {
+          return await _core.openAppFromBundle(
+            BundleInstalledRef(target.ref),
+            entry: entry,
+            identity: identity,
+          );
+        } on BundleLoadException catch (e) {
+          if (e.reason == BundleLoadReason.notFound) {
+            throw EntryTargetNotInstalled(target.kind, target.ref);
+          }
+          rethrow;
+        }
 
       case EntryTargetKind.listing:
         // A listing names something to acquire, not something to render. The

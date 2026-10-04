@@ -73,14 +73,14 @@ void main() {
     verify(() => board.client.disconnect()).called(1);
   });
 
-  test('a device adopted by the kernel once (composed origin, lending) is still '
+  test(
+      'a device adopted by the kernel once (composed origin, lending) is still '
       'released, and the adoption is closed with it', () async {
     // Measured 2026-09-17: the Mac had lent the H723 once; counting that
     // adoption as a live consumer kept the removed card's serial port open.
     await core.openAppFromServer(id);
     await core.openSavedDeviceAsOrigin(id);
-    expect(core.kernelConnectionsForInternals.map((c) => c.id),
-        contains(id),
+    expect(core.kernelConnectionsForInternals.map((c) => c.id), contains(id),
         reason: 'premise: the kernel lists the adoption');
 
     final released = await core.releaseServerApp(id);
@@ -96,12 +96,38 @@ void main() {
 
   test('a dashboard tile watching the device keeps the connection', () async {
     await core.openAppFromServer(id);
-    core.runtimeManagerForInternals
-        .getOrCreateRuntime(DashboardOrchestrator.deviceSummaryRuntimeHandle(id));
+    core.runtimeManagerForInternals.getOrCreateRuntime(
+        DashboardOrchestrator.deviceSummaryRuntimeHandle(id));
 
     final released = await core.releaseServerApp(id);
 
     expect(released, isFalse);
+    expect(held(), isTrue);
+    verifyNever(() => board.client.disconnect());
+  });
+
+  test('closing the session lets go of the connection, as closeApp does',
+      () async {
+    // Measured 2026-10-02: an entry screen closed on the Mac kept its TCP link
+    // to a single-peer device, so the simulator's probe of the same device
+    // queued behind it and reported "not found".
+    final session = await core.openAppFromServer(id);
+    expect(held(), isTrue, reason: 'premise: open app holds the link');
+
+    await session.close();
+
+    expect(held(), isFalse);
+    expect(hasRuntime(), isFalse);
+    verify(() => board.client.disconnect()).called(1);
+  });
+
+  test('closing the session leaves a connection another holder still uses',
+      () async {
+    final session = await core.openAppFromServer(id);
+    core.retainConnection(id, 'lend:phone');
+
+    await session.close();
+
     expect(held(), isTrue);
     verifyNever(() => board.client.disconnect());
   });

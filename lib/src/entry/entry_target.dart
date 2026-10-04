@@ -200,11 +200,10 @@ extension EntryTargetCodec on EntryTarget {
   /// exception at this seam would surface as a crash on a scan.
   static EntryTarget fromJson(Map<String, dynamic> json) {
     final issuerJson = json['issuer'];
+    // The issuer comes whole — name, verification and the operator's direct
+    // contact (§4.1.3), which the host shows where something went wrong.
     final issuer = issuerJson is Map<String, dynamic>
-        ? EntryIssuer(
-            name: issuerJson['name'] as String? ?? '',
-            verified: issuerJson['verified'] as bool? ?? false,
-          )
+        ? EntryIssuer.fromJson(issuerJson)
         : const EntryIssuer(name: '');
 
     final status = EntryStatus.fromWire(json['status'] as String?);
@@ -229,7 +228,8 @@ extension EntryTargetCodec on EntryTarget {
     EntryGrant? grant;
     if (grantJson is Map<String, dynamic>) {
       final token = grantJson['token'] as String?;
-      final expires = DateTime.tryParse(grantJson['expiresAt'] as String? ?? '');
+      final expires =
+          DateTime.tryParse(grantJson['expiresAt'] as String? ?? '');
       if (token != null && expires != null) {
         grant = EntryGrant(
           token: token,

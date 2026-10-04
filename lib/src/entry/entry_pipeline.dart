@@ -59,8 +59,7 @@ class EntryDecision {
     required this.identityRequired,
   });
 
-  const EntryDecision.open(EntryTarget target,
-      {required bool identityRequired})
+  const EntryDecision.open(EntryTarget target, {required bool identityRequired})
       : this._(
           target: target,
           rejection: null,

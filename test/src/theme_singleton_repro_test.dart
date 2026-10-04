@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_mcp_ui_runtime/flutter_mcp_ui_runtime.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Fact-check repro for the runtime 0.5.1 process-singleton ThemeManager —
-/// documents exactly what the host's per-entry brightness re-injection can
-/// and cannot cover. Two engines are created the way the core service does
-/// (one runtime per app handle); the assertions show the shared-singleton
-/// cross-talk between them.
+/// Fact-check for theme isolation between apps. Runtime 0.5.1 kept one
+/// process-wide ThemeManager, and two engines created the way the core service
+/// does (one runtime per app handle) bled into each other; since 0.8.4 each
+/// engine owns its own. The first two tests hold that; the H2/H4 tests still
+/// document the shared manager outside an engine (`ThemeManager()`).
 Map<String, dynamic> _appDef({Map<String, dynamic>? theme}) => {
       'type': 'application',
       'title': 'repro',
@@ -18,16 +18,15 @@ Map<String, dynamic> _appDef({Map<String, dynamic>? theme}) => {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('engines share ONE ThemeManager instance (process singleton)', () async {
+  test('each engine keeps its own ThemeManager (runtime 0.8.4)', () async {
     final a = MCPUIRuntime();
     final b = MCPUIRuntime();
-    expect(identical(a.engine.themeManager, b.engine.themeManager), isTrue);
+    expect(identical(a.engine.themeManager, b.engine.themeManager), isFalse);
   });
 
-  test('H1: palette pollution — app without theme inherits the previous '
-      'app\'s custom palette; brightness re-injection cannot fix it', () async {
-    final tm = ThemeManager();
-
+  test(
+      'H1 fixed: an app without a theme does not inherit the previous '
+      'app\'s palette', () async {
     // App A declares a custom light palette (a market sample would).
     final a = MCPUIRuntime();
     await a.initialize(
@@ -45,16 +44,10 @@ void main() {
       pageLoader: (route) async => {'type': 'page', 'content': {}},
     );
 
-    // B renders with A's palette and A's declared mode — the singleton
-    // kept A's customization (B declared neither).
-    expect(tm.getThemeValue('color.primary'), '#FF0000');
-    expect(tm.getThemeValue('mode'), 'light');
-
-    // The host's re-injection pins BRIGHTNESS only; the foreign palette
-    // stays. This is the "dark but weird colors" symptom.
-    tm.setHostBrightness(Brightness.dark);
-    expect(tm.flutterThemeMode, ThemeMode.dark);
-    expect(tm.getThemeValue('color.primary'), '#FF0000');
+    // A keeps its palette; B renders its own defaults — nothing crosses.
+    expect(a.engine.themeManager.getThemeValue('color.primary'), '#FF0000');
+    expect(
+        b.engine.themeManager.getThemeValue('color.primary'), isNot('#FF0000'));
   });
 
   test('H2: a disposing runtime surface clears the OTHER app\'s host pin',
@@ -72,7 +65,8 @@ void main() {
     expect(tm.flutterThemeMode, isNot(ThemeMode.dark));
   });
 
-  test('H4: runtime destroy resets the WHOLE singleton (pin included) — '
+  test(
+      'H4: runtime destroy resets the WHOLE singleton (pin included) — '
       'ownership tags must not outlive the session', () async {
     final tm = ThemeManager();
     // Entry state: an app's baseline + dark pin.
@@ -92,7 +86,8 @@ void main() {
     expect(tm.getThemeValue('dark'), isNull);
   });
 
-  test('H5: fingerprint flips on ANY external mutation — the liveness probe '
+  test(
+      'H5: fingerprint flips on ANY external mutation — the liveness probe '
       'a skip-gate must use instead of an ownership tag', () async {
     final tm = ThemeManager();
     tm.setTheme({

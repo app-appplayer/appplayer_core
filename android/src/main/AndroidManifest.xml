@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- A reminder at a set time (a bought time running out). Exact where the
+         system allows it; inexact otherwise. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application>
         <!-- Foreground service that keeps MCP connections alive while the app
@@ -15,5 +18,9 @@
             android:name=".BackgroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Shows notifications posted for a later time (FR-NOTIF). -->
+        <receiver
+            android:name=".NotificationAlarmReceiver"
+            android:exported="false" />
     </application>
 </manifest>

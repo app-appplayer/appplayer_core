@@ -2,10 +2,13 @@ package com.makemind.appplayer_core
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.OneTimeWorkRequestBuilder
@@ -116,15 +119,42 @@ class AppPlayerCorePlugin :
                     call.argument<String>("id") ?: "",
                     call.argument<String>("title") ?: "",
                     call.argument<String>("body") ?: "",
-                    call.argument<String>("source") ?: ""
+                    call.argument<String>("source") ?: "",
+                    call.argument<Number>("at")?.toLong(),
+                    call.argument<Number>("expiresAt")?.toLong()
                 )
                 result.success(null)
             }
+            "notification.requestExactTiming" ->
+                result.success(requestExactTiming())
             "notification.cancel" -> {
                 notifications.cancel(call.argument<String>("id") ?: "")
                 result.success(null)
             }
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * Android 12+ makes exact alarms a separate grant ("Alarms & reminders");
+     * without it a reminder may arrive minutes late. Opens that screen for
+     * this app when it is not granted.
+     */
+    private fun requestExactTiming(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarms = context.getSystemService(AlarmManager::class.java) ?: return false
+        if (alarms.canScheduleExactAlarms()) return true
+        val current = activity ?: return false
+        return try {
+            current.startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:" + current.packageName),
+                )
+            )
+            false
+        } catch (e: Exception) {
+            false
         }
     }
 

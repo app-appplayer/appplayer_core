@@ -1,3 +1,5 @@
+import 'dart:ui' show Locale;
+
 import 'package:appplayer_core/src/connection/transport_factory.dart';
 import 'package:appplayer_core/src/model/server_config.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -142,6 +144,63 @@ void main() {
         )),
         throwsA(isA<ArgumentError>()),
       );
+    });
+  });
+
+  group('Accept-Language (FR-CONN-011)', () {
+    ServerConfig http0([Map<String, dynamic> extra = const {}]) => _cfg(
+          type: TransportType.streamableHttp,
+          config: {'baseUrl': 'https://api.example.test/mcp', ...extra},
+        );
+
+    test('TC-TRANS-009: streamable HTTP carries the language', () {
+      final result = factory.create(
+        http0(const {'accessToken': 'tok'}),
+        acceptLanguage: 'ko-KR, en-US;q=0.9',
+      ) as StreamableHttpTransportConfig;
+      expect(result.headers, {
+        'Accept-Language': 'ko-KR, en-US;q=0.9',
+        'Authorization': 'Bearer tok',
+      });
+    });
+
+    test('TC-TRANS-010: a header the config names wins, whatever its case', () {
+      final result = factory.create(
+        http0(const {
+          'headers': {'accept-language': 'ja-JP'},
+        }),
+        acceptLanguage: 'ko-KR',
+      ) as StreamableHttpTransportConfig;
+      expect(result.headers, {'accept-language': 'ja-JP'});
+    });
+
+    test('TC-TRANS-010: stdio and sse are unchanged by a language', () {
+      final stdio = factory.create(
+        _cfg(type: TransportType.stdio, config: const {'command': 'dart'}),
+        acceptLanguage: 'ko-KR',
+      );
+      expect(stdio, isA<StdioTransportConfig>());
+      final sse = factory.create(
+        _cfg(
+            type: TransportType.sse,
+            config: const {'serverUrl': 'https://x.test/sse'}),
+        acceptLanguage: 'ko-KR',
+      ) as SseTransportConfig;
+      expect(sse.headers, isNull);
+    });
+
+    test('TC-TRANS-011: acceptLanguageOf', () {
+      expect(
+        acceptLanguageOf(const [
+          Locale('ko', 'KR'),
+          Locale('en', 'US'),
+          Locale('ja'),
+        ]),
+        'ko-KR, en-US;q=0.9, ja;q=0.8',
+      );
+      expect(acceptLanguageOf(const []), isNull);
+      final many = acceptLanguageOf(List.filled(12, const Locale('en')))!;
+      expect(many.split(', ').last, 'en;q=0.1');
     });
   });
 }

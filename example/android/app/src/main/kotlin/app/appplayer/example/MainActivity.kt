@@ -1,4 +1,4 @@
-package com.appplayer.example
+package app.appplayer.example
 
 import io.flutter.embedding.android.FlutterActivity
 

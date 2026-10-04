@@ -1,0 +1,34 @@
+{
+  "type": "page",
+  "content": {
+    "type": "linear",
+    "direction": "vertical",
+    "children": [
+      {
+        "type": "text",
+        "content": "A HOME"
+      },
+      {
+        "type": "button",
+        "label": "A NEXT",
+        "onTap": {
+          "type": "navigation",
+          "action": "push",
+          "route": "/next"
+        }
+      },
+      {
+        "type": "button",
+        "label": "A ASK",
+        "onTap": {
+          "type": "dialog",
+          "dialog": {
+            "type": "alertDialog",
+            "title": "A DIALOG",
+            "content": "hello"
+          }
+        }
+      }
+    ]
+  }
+}

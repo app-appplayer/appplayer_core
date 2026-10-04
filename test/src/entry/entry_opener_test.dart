@@ -50,6 +50,19 @@ void main() {
     await session.close();
   });
 
+  test('a bundle this device does not have is reported as not installed',
+      () async {
+    final opener = EntryOpener(core: core);
+    await expectLater(
+      opener.open(
+        target: _ref(EntryTargetKind.bundle, 'com.example.not_here'),
+        entry: _entry(),
+      ),
+      throwsA(isA<EntryTargetNotInstalled>()
+          .having((e) => e.ref, 'ref', 'com.example.not_here')),
+    );
+  });
+
   test('a server target registers once, on the key the transport reads',
       () async {
     // A closed loopback port: the dial must refuse at once rather than resolve

@@ -47,14 +47,28 @@ class MethodChannelAppNotificationPort implements AppNotificationPort {
   @override
   Future<PermissionStatus> requestPermission() async {
     try {
-      final raw = await _methods
-          .invokeMethod<String>('notification.requestPermission');
+      final raw =
+          await _methods.invokeMethod<String>('notification.requestPermission');
       return _statusFrom(raw);
     } on MissingPluginException {
       return PermissionStatus.granted;
     } on PlatformException catch (e) {
       _logger.warn('notification.requestPermission.failed', {'code': e.code});
       return PermissionStatus.denied;
+    }
+  }
+
+  @override
+  Future<bool> requestExactTiming() async {
+    try {
+      return await _methods
+              .invokeMethod<bool>('notification.requestExactTiming') ??
+          false;
+    } on MissingPluginException {
+      return true;
+    } on PlatformException catch (e) {
+      _logger.warn('notification.requestExactTiming.failed', {'code': e.code});
+      return false;
     }
   }
 
@@ -66,6 +80,10 @@ class MethodChannelAppNotificationPort implements AppNotificationPort {
         'title': notification.title,
         'body': notification.body,
         'source': notification.source.toString(),
+        if (notification.at != null)
+          'at': notification.at!.millisecondsSinceEpoch,
+        if (notification.expiresAt != null)
+          'expiresAt': notification.expiresAt!.millisecondsSinceEpoch,
       });
     } on MissingPluginException {
       // no native notifications — drop

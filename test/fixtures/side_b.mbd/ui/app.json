@@ -1,0 +1,1 @@
+{"type": "application", "title": "Side B", "routes": {"/": "ui://pages/home", "/next": "ui://pages/next"}, "initialRoute": "/", "version": "1.4"}

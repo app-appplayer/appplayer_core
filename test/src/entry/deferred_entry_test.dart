@@ -96,8 +96,8 @@ void main() {
       final resolver =
           DeferredEntryResolver(store: store, source: _Source('ABC'));
 
-      expect((await resolver.onLaunch()).outcome,
-          DeferredEntryOutcome.recovered);
+      expect(
+          (await resolver.onLaunch()).outcome, DeferredEntryOutcome.recovered);
       // Recovering twice would reopen the same entry on a launch the viewer
       // never connected to it.
       expect((await resolver.onLaunch()).outcome, DeferredEntryOutcome.none);

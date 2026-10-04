@@ -26,8 +26,8 @@ void main() {
     // The host is which registry answers. Resolving without one would mean
     // guessing whose registry a code belongs to.
     expect(
-      () => resolverReturning(<String, Object?>{}).resolve('c',
-          host: '', locale: 'en'),
+      () => resolverReturning(<String, Object?>{})
+          .resolve('c', host: '', locale: 'en'),
       throwsArgumentError,
     );
   });
@@ -106,6 +106,44 @@ void main() {
       expect(target.validUntil, isNotNull);
     });
 
+    test('the operator\'s direct contact comes with the issuer (§4.1.3)',
+        () async {
+      final resolver = resolverReturning(<String, dynamic>{
+        'status': 'expired',
+        'issuer': <String, dynamic>{
+          'name': 'Central Station Lockers',
+          'verified': true,
+          'support': <String, dynamic>{
+            'url': 'https://lockers.example.test/help',
+            'phone': '+15555550100',
+            'email': 'not-an-address',
+          },
+        },
+        'identityPolicy': 'optional',
+      });
+
+      final target = await resolver.resolve('c', host: host, locale: 'en');
+      // Even on a refusal: that is when a person most needs it.
+      expect(target.issuer.support!.url, 'https://lockers.example.test/help');
+      expect(target.issuer.support!.phone, '+15555550100');
+      expect(target.issuer.support!.email, isNull,
+          reason: 'a value the OS would be asked to open is kept only in form');
+    });
+
+    test('an issuer without contact carries none', () async {
+      final resolver = resolverReturning(<String, dynamic>{
+        'status': 'ok',
+        'issuer': <String, dynamic>{'name': 'Fleet Co', 'verified': true},
+        'target': <String, dynamic>{
+          'kind': 'server',
+          'ref': 'https://fleet.example.test/mcp',
+        },
+        'identityPolicy': 'optional',
+      });
+      final target = await resolver.resolve('c', host: host, locale: 'en');
+      expect(target.issuer.support, isNull);
+    });
+
     test('an unknown target kind leaves no target, so the answer is not ok',
         () async {
       final resolver = resolverReturning(<String, dynamic>{
@@ -146,7 +184,8 @@ void main() {
         'target': <String, dynamic>{'kind': 'server', 'ref': 'https://x.test'},
         'notice': <String, dynamic>{'kind': 'advisory', 'message': ''},
       });
-      expect((await resolver.resolve('c', host: host, locale: 'en')).notice, isNull);
+      expect((await resolver.resolve('c', host: host, locale: 'en')).notice,
+          isNull);
     });
   });
 
@@ -160,7 +199,8 @@ void main() {
 
     test('a JSON array is denied', () async {
       final resolver = resolverReturning(<dynamic>[1, 2, 3]);
-      expect((await resolver.resolve('c', host: host, locale: 'en')).isOk, isFalse);
+      expect((await resolver.resolve('c', host: host, locale: 'en')).isOk,
+          isFalse);
     });
 
     test('a transport failure is denied with a reason, not thrown', () async {

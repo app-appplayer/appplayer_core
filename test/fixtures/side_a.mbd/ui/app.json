@@ -1,0 +1,1 @@
+{"type": "application", "title": "Side A", "routes": {"/": "ui://pages/home", "/next": "ui://pages/next"}, "initialRoute": "/", "version": "1.4", "theme": {"mode": "light", "color": {"primary": "#FF0000"}}}

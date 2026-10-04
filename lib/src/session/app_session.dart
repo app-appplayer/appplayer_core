@@ -79,9 +79,9 @@ abstract class AppSession {
     IdentityPromoter? onRelease,
   });
 
-  /// Unsubscribe resources and destroy the underlying runtime. The server
-  /// connection (if any) is not terminated because another session may be
-  /// sharing it — hosts disconnect explicitly via the connection manager
-  /// when they truly want the transport closed.
+  /// Unsubscribe resources, destroy the underlying runtime and let go of this
+  /// screen's hold on the server connection (if any). The connection closes
+  /// only when nothing else holds it — a lent session on the same device keeps
+  /// it open (23 §6.1.4).
   Future<void> close();
 }

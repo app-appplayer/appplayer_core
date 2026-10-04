@@ -55,8 +55,15 @@ class ConnectionSharing {
 /// Notifications: this wrapper holds the inner client's single handler slot
 /// per method, runs its own bookkeeping first and then the consumer's handler.
 /// To a consumer it is the same one-handler-per-method client as before.
+/// Asked when a call was refused for want of a signed-in person (HTTP 401,
+/// reported as `-32001`). True means try the call once more.
+typedef UnauthorizedHandler = Future<bool> Function();
+
+/// The client-internal code `mcp_client` reports an HTTP 401 with.
+const int kAuthenticationRequiredCode = -32001;
+
 class SharedClient implements Client {
-  SharedClient(this.inner, this.sharing) {
+  SharedClient(this.inner, this.sharing, {this.onUnauthorized}) {
     for (final method in _watched) {
       _install(method);
     }
@@ -66,6 +73,24 @@ class SharedClient implements Client {
   /// The connector's client. Everything not governed here goes straight to it.
   final Client inner;
   final ConnectionSharing sharing;
+
+  /// What to do when a tool call is refused for want of a person. Null leaves
+  /// the refusal as it came.
+  final UnauthorizedHandler? onUnauthorized;
+
+  /// Runs [call]; when it is refused for want of a person and the host signs
+  /// someone in, runs it once more. Never more than once — a second refusal is
+  /// the answer.
+  Future<T> _withSignIn<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } on McpError catch (e) {
+      final handler = onUnauthorized;
+      if (e.code != kAuthenticationRequiredCode || handler == null) rethrow;
+      if (!await handler()) rethrow;
+      return call();
+    }
+  }
 
   /// When the server last answered or sent anything, or null before that.
   DateTime? get lastMessageAt => _lastMessageAt;
@@ -220,8 +245,7 @@ class SharedClient implements Client {
   // ----------------------------------------------------- governed requests
 
   @override
-  Future<List<Tool>> listTools() =>
-      _list(_toolsList, () => inner.listTools());
+  Future<List<Tool>> listTools() => _list(_toolsList, () => inner.listTools());
 
   @override
   Future<List<Resource>> listResources() =>
@@ -264,7 +288,7 @@ class SharedClient implements Client {
     String name,
     Map<String, dynamic> toolArguments,
   ) =>
-      _gated(() => inner.callTool(name, toolArguments));
+      _withSignIn(() => _gated(() => inner.callTool(name, toolArguments)));
 
   @override
   Future<ToolCallTracking> callToolWithTracking(
@@ -272,8 +296,8 @@ class SharedClient implements Client {
     Map<String, dynamic> arguments, {
     bool trackProgress = true,
   }) =>
-      _gated(() => inner.callToolWithTracking(name, arguments,
-          trackProgress: trackProgress));
+      _withSignIn(() => _gated(() => inner.callToolWithTracking(name, arguments,
+          trackProgress: trackProgress)));
 
   @override
   Future<ReadResourceResult> getResourceWithTemplate(
@@ -365,9 +389,9 @@ class SharedClient implements Client {
       onNotification('notifications/roots/list_changed', (_) => handler());
 
   @override
-  void onResourceUpdated(Function(String) handler) =>
-      onNotification('notifications/resources/updated',
-          (params) => handler(params['uri'] as String));
+  void onResourceUpdated(Function(String) handler) => onNotification(
+      'notifications/resources/updated',
+      (params) => handler(params['uri'] as String));
 
   @override
   void onResourceContentUpdated(
@@ -375,8 +399,8 @@ class SharedClient implements Client {
   ) =>
       onNotification('notifications/resources/updated', (params) {
         final contentData = params['content'] as Map<String, dynamic>;
-        handler(params['uri'] as String,
-            ResourceContentInfo.fromJson(contentData));
+        handler(
+            params['uri'] as String, ResourceContentInfo.fromJson(contentData));
       });
 
   @override
@@ -439,7 +463,8 @@ class SharedClient implements Client {
   List<Root> get roots => inner.roots;
 
   @override
-  Future<void> connect(ClientTransport transport, {bool statelessMode = false}) =>
+  Future<void> connect(ClientTransport transport,
+          {bool statelessMode = false}) =>
       inner.connect(transport, statelessMode: statelessMode);
   @override
   Future<void> connectWithRetry(

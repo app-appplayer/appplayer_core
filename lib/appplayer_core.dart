@@ -23,8 +23,9 @@ export 'src/connection/connection_state.dart';
 // Durable-reconnect token re-grant hook (host-provided). Only the typedef is
 // public; the ConnectionManager itself stays internal.
 export 'src/connection/connection_manager.dart' show ServerReGrant;
-export 'src/connection/connection_health_monitor.dart'
-    show HealthMonitorConfig;
+export 'src/connection/serving_authorization.dart'
+    show ServingAuthorization, ServingHeaders, ChallengeRecordingClient;
+export 'src/connection/connection_health_monitor.dart' show HealthMonitorConfig;
 
 // Bundle handles / host ports
 export 'src/bundle/bundle_ref.dart';
@@ -33,6 +34,7 @@ export 'src/bundle/bundle_ref.dart';
 export 'src/entry/deferred_entry.dart';
 export 'src/entry/entry_link.dart';
 export 'src/entry/entry_target.dart';
+export 'src/entry/entry_chrome.dart';
 export 'src/entry/entry_opener.dart';
 export 'src/entry/entry_pipeline.dart';
 export 'src/entry/http_entry_resolver.dart';
@@ -83,7 +85,7 @@ export 'package:brain_kernel/brain_kernel.dart'
 // Upstream version constant re-export (flutter_mcp_ui_core) — allows hosts
 // to display the DSL version without importing the runtime package directly.
 export 'package:flutter_mcp_ui_core/flutter_mcp_ui_core.dart'
-    show MCPUIDSLVersion;
+    show EntrySupport, MCPUIDSLVersion;
 
 // Upstream form-factor + responsive token re-export
 // (flutter_mcp_ui_runtime) — allows hosts to consume the FormFactor

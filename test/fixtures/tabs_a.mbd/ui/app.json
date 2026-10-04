@@ -1,0 +1,1 @@
+{"type": "application", "title": "Tabs A", "routes": {"/": "ui://pages/home", "/next": "ui://pages/next"}, "initialRoute": "/", "version": "1.4", "navigation": {"type": "bottomNavigation", "items": [{"title": "Home", "route": "/", "icon": "home"}, {"title": "Next", "route": "/next", "icon": "list"}]}}

@@ -21,11 +21,9 @@ void main() {
 
   group('ToolDispatcher (MOD-RUNTIME-003)', () {
     test('TC-TOOL-001: normal call returns decoded JSON map', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('incr')]);
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('incr')]);
       when(() => client.callTool('incr', any())).thenAnswer(
-        (_) async =>
-            CallToolResult([const TextContent(text: '{"count":5}')]),
+        (_) async => CallToolResult([const TextContent(text: '{"count":5}')]),
       );
 
       final result = await ToolDispatcher().call(
@@ -38,8 +36,7 @@ void main() {
     });
 
     test('TC-TOOL-002: tool not found', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('other')]);
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('other')]);
       await expectLater(
         ToolDispatcher().call(
           client: client,
@@ -51,8 +48,7 @@ void main() {
     });
 
     test('TC-TOOL-003: multi-key response returned verbatim', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('t')]);
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenAnswer((_) async =>
           CallToolResult([const TextContent(text: '{"a":1,"b":"x"}')]));
       final result = await ToolDispatcher().call(
@@ -64,8 +60,7 @@ void main() {
     });
 
     test('TC-TOOL-004: empty content — returns null', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('t')]);
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any()))
           .thenAnswer((_) async => const CallToolResult([]));
       final result = await ToolDispatcher().call(
@@ -77,10 +72,9 @@ void main() {
     });
 
     test('TC-TOOL-006: parse failure — logged, returns null', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('t')]);
-      when(() => client.callTool('t', any())).thenAnswer((_) async =>
-          CallToolResult([const TextContent(text: 'not-json')]));
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
+      when(() => client.callTool('t', any())).thenAnswer(
+          (_) async => CallToolResult([const TextContent(text: 'not-json')]));
       final result = await ToolDispatcher().call(
         client: client,
         tool: 't',
@@ -89,8 +83,27 @@ void main() {
       expect(result, isNull);
     });
 
-    test('TC-TOOL-007: listTools failure → ToolExecutionException',
-        () async {
+    test(
+        'TC-TOOL-009: a call the server refused reaches the runtime as a '
+        'failure, with its text', () async {
+      when(() => client.listTools())
+          .thenAnswer((_) async => [_tool('contact.leave')]);
+      when(() => client.callTool('contact.leave', any())).thenAnswer(
+          (_) async => CallToolResult(
+              [const TextContent(text: 'ERR_CONTACT_WAIT')],
+              isError: true));
+      final result = await ToolDispatcher().call(
+        client: client,
+        tool: 'contact.leave',
+        params: const {},
+      );
+      expect(result, isA<Map>());
+      expect(result['isError'], isTrue,
+          reason: 'null read as success — the button said nothing');
+      expect(result['content'][0]['text'], 'ERR_CONTACT_WAIT');
+    });
+
+    test('TC-TOOL-007: listTools failure → ToolExecutionException', () async {
       when(() => client.listTools()).thenThrow(StateError('down'));
       await expectLater(
         ToolDispatcher().call(
@@ -103,8 +116,7 @@ void main() {
     });
 
     test('TC-TOOL-008: callTool failure → ToolExecutionException', () async {
-      when(() => client.listTools())
-          .thenAnswer((_) async => [_tool('t')]);
+      when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenThrow(StateError('boom'));
       await expectLater(
         ToolDispatcher().call(
@@ -155,7 +167,8 @@ void main() {
       );
     });
 
-    test('routerFor(null): an unregistered tool fails instead of returning null',
+    test(
+        'routerFor(null): an unregistered tool fails instead of returning null',
         () async {
       // A null return reads as a successful call with no payload one layer up,
       // so a misspelled tool name reached `onSuccess` and the document carried
@@ -174,11 +187,13 @@ void main() {
     test('routerFor(null): a registered in-process tool still answers',
         () async {
       final dispatcher = ToolDispatcher();
-      dispatcher.registerInProcessTools({'local.echo': (args) async => {'ok': true}});
+      dispatcher.registerInProcessTools({
+        'local.echo': (args) async => {'ok': true}
+      });
       final route = dispatcher.routerFor(null);
 
-      expect(await route('local.echo', const <String, dynamic>{}),
-          {'ok': true});
+      expect(
+          await route('local.echo', const <String, dynamic>{}), {'ok': true});
     });
 
     test('callInProcess unknown tool → ToolNotFoundException', () async {
@@ -189,8 +204,7 @@ void main() {
       );
     });
 
-    test('callInProcess handler throwing → ToolExecutionException',
-        () async {
+    test('callInProcess handler throwing → ToolExecutionException', () async {
       final d = ToolDispatcher();
       d.registerInProcessTool('boom', (_) async => throw StateError('x'));
       await expectLater(

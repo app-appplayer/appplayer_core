@@ -74,7 +74,8 @@ void main() {
 
   group('§4.3 opening', () {
     test('an ok answer opens', () async {
-      final d = await _pipeline(_ok()).decide('c', host: 'entry.example.test', locale: locale);
+      final d = await _pipeline(_ok())
+          .decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isTrue);
       expect(d.identityRequired, isFalse);
     });
@@ -129,7 +130,8 @@ void main() {
         issuer: EntryIssuer(name: 'Fleet Co', verified: true),
         reason: 'medium retired',
       );
-      final d = await _pipeline(revoked).decide('c', host: 'entry.example.test', locale: locale);
+      final d = await _pipeline(revoked)
+          .decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isFalse);
       expect(d.rejection, EntryRejection.notOk);
       // The gate has to say who was asking, even on a failure.
@@ -142,7 +144,8 @@ void main() {
         status: EntryStatus.ok,
         issuer: EntryIssuer(name: 'Fleet Co'),
       );
-      final d = await _pipeline(headless).decide('c', host: 'entry.example.test', locale: locale);
+      final d = await _pipeline(headless)
+          .decide('c', host: 'entry.example.test', locale: locale);
       expect(d.canOpen, isFalse);
     });
 
@@ -213,8 +216,7 @@ void main() {
   });
 
   group('§8.1 what reaches the document', () {
-    test('route, params, issuer and grant scope cross; the token does not',
-        () {
+    test('route, params, issuer and grant scope cross; the token does not', () {
       final target = _ok(
         route: '/contact',
         grant: EntryGrant(
@@ -262,8 +264,8 @@ void main() {
 
     test('an unknown target kind is null rather than a guess', () {
       expect(EntryTargetKind.fromWire('hologram'), isNull);
-      expect(EntryTargetKind.fromWire('localServer'),
-          EntryTargetKind.localServer);
+      expect(
+          EntryTargetKind.fromWire('localServer'), EntryTargetKind.localServer);
     });
   });
 

@@ -74,4 +74,49 @@ void main() {
       expect(port.isActive, isFalse);
     });
   });
+
+  group('MethodChannelAppNotificationPort — a later time', () {
+    test('a notification for later carries its time to the platform', () async {
+      const channel = MethodChannel('makemind.appplayer_core/methods');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding
+          .instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+
+      final at = DateTime.utc(2026, 10, 3, 18, 0, 0);
+      final port = MethodChannelAppNotificationPort();
+      await port.post(AppNotification(
+        id: 'ticket.t1.120',
+        title: 'Sunrise Self Wash',
+        body: '2 min left',
+        source: const AppHandle.server('safepage'),
+        at: at,
+        expiresAt: at.add(const Duration(minutes: 2)),
+      ));
+      await port.post(const AppNotification(
+        id: 'now',
+        title: 't',
+        body: 'b',
+        source: AppHandle.server('safepage'),
+      ));
+      expect(calls[0].arguments['at'], at.millisecondsSinceEpoch);
+      expect(calls[0].arguments['expiresAt'],
+          at.add(const Duration(minutes: 2)).millisecondsSinceEpoch,
+          reason: 'what is no longer true is not shown late');
+      expect((calls[1].arguments as Map).containsKey('at'), isFalse,
+          reason: 'shown now carries no time');
+    });
+  });
+
+  test('exact timing reads as given where the platform has nothing to ask',
+      () async {
+    expect(
+        await MethodChannelAppNotificationPort().requestExactTiming(), isTrue);
+    expect(await const NoOpNotificationPort().requestExactTiming(), isTrue);
+  });
 }

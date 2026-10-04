@@ -184,6 +184,20 @@ class ToolDispatcher {
     _logger
         .debug('Tool result', {'tool': tool, 'items': result.content.length});
 
+    // The server refused the call (a rate limit, a rule): the runtime must see
+    // a failure and fire the document's `onError`. Read as a payload, the
+    // refusal text is not JSON, came back null, and the runtime took the call
+    // for a success — the button did nothing and said nothing.
+    if (result.isError == true) {
+      final text = result.content.whereType<TextContent>().map((c) => c.text);
+      return <String, dynamic>{
+        'content': <Map<String, dynamic>>[
+          <String, dynamic>{'type': 'text', 'text': text.join('\n')},
+        ],
+        'isError': true,
+      };
+    }
+
     if (result.content.isEmpty) return null;
     final first = result.content.first;
     if (first is! TextContent) return null;

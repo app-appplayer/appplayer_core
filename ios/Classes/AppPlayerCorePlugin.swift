@@ -105,8 +105,12 @@ public class AppPlayerCorePlugin: NSObject, FlutterPlugin,
         id: args["id"] as? String ?? "",
         title: args["title"] as? String ?? "",
         body: args["body"] as? String ?? "",
-        source: args["source"] as? String ?? "")
+        source: args["source"] as? String ?? "",
+        at: (args["at"] as? NSNumber)?.doubleValue)
       result(nil)
+    case "notification.requestExactTiming":
+      // A time trigger is delivered on time; there is nothing to ask for.
+      result(true)
     case "notification.cancel":
       notifications.cancel(id: args["id"] as? String ?? "")
       result(nil)
@@ -231,13 +235,24 @@ public class AppPlayerCorePlugin: NSObject, FlutterPlugin,
 // MARK: - Notification bridge
 
 private class NotificationBridge {
-  func post(id: String, title: String, body: String, source: String) {
+  /// [at] is milliseconds since the epoch; a time in the future is left to
+  /// the system to show, so it arrives with this app suspended.
+  func post(id: String, title: String, body: String, source: String,
+            at: Double?) {
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
+    content.sound = .default
     content.userInfo = ["source": source]
+    var trigger: UNNotificationTrigger? = nil
+    if let at = at {
+      let wait = at / 1000.0 - Date().timeIntervalSince1970
+      if wait >= 1 {
+        trigger = UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)
+      }
+    }
     let request = UNNotificationRequest(
-      identifier: id, content: content, trigger: nil)
+      identifier: id, content: content, trigger: trigger)
     UNUserNotificationCenter.current().add(request)
   }
 

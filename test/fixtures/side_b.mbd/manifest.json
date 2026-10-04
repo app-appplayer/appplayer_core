@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0.0",
+  "manifest": {
+    "id": "com.example.side_b",
+    "name": "Side B",
+    "version": "1.0.0",
+    "schemaVersion": "1.0.0",
+    "type": "application",
+    "entryPoint": "ui.app"
+  }
+}

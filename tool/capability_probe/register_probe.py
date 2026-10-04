@@ -47,7 +47,7 @@ def write_apps(domain: str, apps: list) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("domain", help="preferences domain, e.g. com.makemind.appplayerPro")
+    parser.add_argument("domain", help="preferences domain, e.g. app.appplayer.pro")
     parser.add_argument("--remove", action="store_true",
                         help="take the probe off the launcher again")
     args = parser.parse_args()

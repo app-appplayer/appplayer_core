@@ -16,9 +16,23 @@ class AppNotification {
     required this.title,
     required this.body,
     required this.source,
+    this.at,
+    this.expiresAt,
   });
 
   final String id;
+
+  /// When to show it — null for now. A later time is handed to the operating
+  /// system, so it is shown even if this process is suspended by then (a
+  /// reminder that a bought time is running out). Posting the same [id]
+  /// again replaces it; [AppNotificationPort.cancel] withdraws it whether it
+  /// is still waiting or already shown.
+  final DateTime? at;
+
+  /// After this time it is not shown at all — what it says has stopped being
+  /// true ("30 s left" once the time is over). A system that delivers a
+  /// scheduled notification late drops it instead of showing it late.
+  final DateTime? expiresAt;
   final String title;
   final String body;
 
@@ -31,6 +45,13 @@ class AppNotification {
 abstract class AppNotificationPort {
   Future<PermissionStatus> permissionStatus();
   Future<PermissionStatus> requestPermission();
+
+  /// Asks, where the system makes it a separate grant (Android 12+ "Alarms &
+  /// reminders"), for notifications posted for later to be shown at their
+  /// exact time rather than when the system finds convenient. True when they
+  /// will be; false when the person still has to allow it (the system screen
+  /// has been opened for them) or it cannot be had.
+  Future<bool> requestExactTiming();
   Future<void> post(AppNotification notification);
   Future<void> cancel(String id);
 
@@ -45,12 +66,14 @@ class NoOpNotificationPort implements AppNotificationPort {
   const NoOpNotificationPort();
 
   @override
-  Future<PermissionStatus> permissionStatus() async =>
-      PermissionStatus.granted;
+  Future<PermissionStatus> permissionStatus() async => PermissionStatus.granted;
 
   @override
   Future<PermissionStatus> requestPermission() async =>
       PermissionStatus.granted;
+
+  @override
+  Future<bool> requestExactTiming() async => true;
 
   @override
   Future<void> post(AppNotification notification) async {}
