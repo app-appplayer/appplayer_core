@@ -45,19 +45,26 @@ class AppNotification {
 abstract class AppNotificationPort {
   Future<PermissionStatus> permissionStatus();
   Future<PermissionStatus> requestPermission();
-
-  /// Asks, where the system makes it a separate grant (Android 12+ "Alarms &
-  /// reminders"), for notifications posted for later to be shown at their
-  /// exact time rather than when the system finds convenient. True when they
-  /// will be; false when the person still has to allow it (the system screen
-  /// has been opened for them) or it cannot be had.
-  Future<bool> requestExactTiming();
   Future<void> post(AppNotification notification);
   Future<void> cancel(String id);
 
   /// Emits the source app when the user taps its notification, so the host
   /// can open that app (FR-NOTIF-004).
   Stream<AppHandle> get taps;
+}
+
+/// A port on a platform where on-time delivery of notifications posted for
+/// later is a separate grant (Android 12+ "Alarms & reminders"). Elsewhere a
+/// later notification is already shown on time and a port has nothing to
+/// offer here, so this is a capability a port has or lacks, not a duty of
+/// every port. A caller matches for it:
+/// `if (port case final ExactNotificationTiming t) await t.requestExactTiming();`
+abstract class ExactNotificationTiming {
+  /// Asks for notifications posted for later to be shown at their exact time
+  /// rather than when the system finds convenient. True when they will be;
+  /// false when the person still has to allow it (the system screen has been
+  /// opened for them) or it cannot be had.
+  Future<bool> requestExactTiming();
 }
 
 /// Default for tests and platforms without notifications: posts are dropped,
@@ -71,9 +78,6 @@ class NoOpNotificationPort implements AppNotificationPort {
   @override
   Future<PermissionStatus> requestPermission() async =>
       PermissionStatus.granted;
-
-  @override
-  Future<bool> requestExactTiming() async => true;
 
   @override
   Future<void> post(AppNotification notification) async {}

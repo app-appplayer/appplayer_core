@@ -179,10 +179,15 @@ class ConnectionHealthMonitor {
   bool Function(String serverId)? isEngaged;
 
   Future<void> _performHealthCheck() async {
+    final generation = _generation;
     // Keepalive + active liveness for transient stream links (BLE etc.): warms
     // the link so it drops far less often, and flips a silently-dead link to
     // error so the reconnect pass below picks it up this same tick.
     await _conn.keepAliveSweep();
+    // Stopped (or restarted) while the sweep was out: this tick schedules
+    // nothing — a reconnect counted after stopMonitoring would carry the new
+    // generation and run.
+    if (generation != _generation) return;
     final entries = _conn.connections.entries.toList();
     for (final entry in entries) {
       final info = entry.value;

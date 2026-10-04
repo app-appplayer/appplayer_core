@@ -105,11 +105,11 @@ void main() {
   testWidgets("labels are the tier's words", (tester) async {
     await tester.pumpWidget(_app(const EntryFrame(
       issuer: _issuer,
-      labels: EntryChromeLabels(verified: '확인된 발급자', guest: '손님'),
+      labels: EntryChromeLabels(verified: 'Checked issuer', guest: 'Visitor'),
       child: SizedBox(),
     )));
-    expect(find.text('확인된 발급자'), findsOneWidget);
-    expect(find.text('손님'), findsOneWidget);
+    expect(find.text('Checked issuer'), findsOneWidget);
+    expect(find.text('Visitor'), findsOneWidget);
   });
 
   testWidgets('an opened entry can be left: a close control on the bar',

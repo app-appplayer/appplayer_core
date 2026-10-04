@@ -15,7 +15,8 @@ import '../permission/platform_permission_port.dart';
 import '../session/app_handle.dart';
 import 'platform_channels.dart';
 
-class MethodChannelAppNotificationPort implements AppNotificationPort {
+class MethodChannelAppNotificationPort
+    implements AppNotificationPort, ExactNotificationTiming {
   MethodChannelAppNotificationPort({
     MethodChannel? methods,
     EventChannel? taps,

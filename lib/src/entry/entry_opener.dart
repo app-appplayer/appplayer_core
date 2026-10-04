@@ -37,8 +37,13 @@ class EntryOpenUnsupported implements Exception {
 ///
 /// Distinct from a failure to load: the target is fine and the answer is to
 /// acquire it, so a host shows a way to get it rather than the loader's error.
-class EntryTargetNotInstalled implements Exception {
-  EntryTargetNotInstalled(this.kind, this.ref);
+///
+/// It is the loader's `notFound` named for what it means to a person, so it is
+/// a [BundleLoadException]: a caller that catches the loader's error keeps
+/// catching it.
+class EntryTargetNotInstalled extends BundleLoadException {
+  EntryTargetNotInstalled(this.kind, this.ref)
+      : super(bundleId: ref, reason: BundleLoadReason.notFound);
   final EntryTargetKind kind;
   final String ref;
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:appplayer_core/src/connection/awaits_reachability.dart';
 import 'package:appplayer_core/src/connection/connection_health_monitor.dart';
 import 'package:appplayer_core/src/connection/connection_manager.dart';
@@ -81,8 +83,8 @@ void main() {
 
     test('TC-HEALTH-008: resetReconnectAttempts allows retries again',
         () async {
-      final m = ConnectionManager(
-          connector: (_) async => throw StateError('fail'));
+      final m =
+          ConnectionManager(connector: (_) async => throw StateError('fail'));
       await m.connect(_server());
 
       final monitor = ConnectionHealthMonitor(
@@ -236,7 +238,8 @@ void main() {
       expect(attempts, greaterThan(5));
     });
 
-    test('TC-HEALTH-030: an open app whose endpoint is known to be absent '
+    test(
+        'TC-HEALTH-030: an open app whose endpoint is known to be absent '
         'waits for the signal instead of dialling on the fixed pace', () async {
       var attempts = 0;
       final m = ConnectionManager(connector: (_) async {
@@ -270,8 +273,10 @@ void main() {
       expect(attempts, 1);
     });
 
-    test('TC-HEALTH-031: an ordinary failure after an absent one is paced '
-        'again — the flag describes the last failure, not the server', () async {
+    test(
+        'TC-HEALTH-031: an ordinary failure after an absent one is paced '
+        'again — the flag describes the last failure, not the server',
+        () async {
       var absent = true;
       final m = ConnectionManager(connector: (_) async {
         if (absent) throw const _LenderOffline();
@@ -504,9 +509,32 @@ void main() {
       monitor.stopMonitoring();
     });
 
+    test(
+        'TC-HEALTH-007b: a sweep in flight when monitoring stops schedules '
+        'nothing', () async {
+      final m = _HeldSweep(connector: (_) async => throw StateError('fail'));
+      await m.connect(_server());
+      final monitor = ConnectionHealthMonitor(
+        conn: m,
+        config: const HealthMonitorConfig(
+          checkInterval: Duration(milliseconds: 10),
+          reconnectDelay: Duration(milliseconds: 2),
+        ),
+      );
+      monitor.startMonitoring();
+      await m.sweepStarted.future;
+      monitor.stopMonitoring();
+      final snap = monitor.getReconnectAttempts('s1');
+      m.letSweepFinish.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(monitor.getReconnectAttempts('s1'), snap,
+          reason:
+              'the sweep that was out when monitoring stopped counts nothing');
+    });
+
     test('TC-HEALTH-007: stopMonitoring halts checks', () async {
-      final m = ConnectionManager(
-          connector: (_) async => throw StateError('fail'));
+      final m =
+          ConnectionManager(connector: (_) async => throw StateError('fail'));
       await m.connect(_server());
 
       final monitor = ConnectionHealthMonitor(
@@ -529,4 +557,22 @@ void main() {
 
 class _LenderOffline implements AwaitsReachability, Exception {
   const _LenderOffline();
+}
+
+/// A connection manager whose keepalive sweep waits to be released, so a test
+/// can stop monitoring while a sweep is out.
+class _HeldSweep extends ConnectionManager {
+  _HeldSweep({required super.connector});
+
+  final Completer<void> sweepStarted = Completer<void>();
+  final Completer<void> letSweepFinish = Completer<void>();
+
+  @override
+  Future<void> keepAliveSweep({
+    Duration timeout = const Duration(seconds: 4),
+    Duration dropAfterSilence = Duration.zero,
+  }) async {
+    if (!sweepStarted.isCompleted) sweepStarted.complete();
+    await letSweepFinish.future;
+  }
 }

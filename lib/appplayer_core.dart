@@ -24,7 +24,7 @@ export 'src/connection/connection_state.dart';
 // public; the ConnectionManager itself stays internal.
 export 'src/connection/connection_manager.dart' show ServerReGrant;
 export 'src/connection/serving_authorization.dart'
-    show ServingAuthorization, ServingHeaders, ChallengeRecordingClient;
+    show ServingAuthorization, ServingHeaders;
 export 'src/connection/connection_health_monitor.dart' show HealthMonitorConfig;
 
 // Bundle handles / host ports
@@ -34,7 +34,8 @@ export 'src/bundle/bundle_ref.dart';
 export 'src/entry/deferred_entry.dart';
 export 'src/entry/entry_link.dart';
 export 'src/entry/entry_target.dart';
-export 'src/entry/entry_chrome.dart';
+// The issuer bar is EntryFrame's own part; hosts compose the frame.
+export 'src/entry/entry_chrome.dart' hide EntryIssuerBar;
 export 'src/entry/entry_opener.dart';
 export 'src/entry/entry_pipeline.dart';
 export 'src/entry/http_entry_resolver.dart';

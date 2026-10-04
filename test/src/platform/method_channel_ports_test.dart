@@ -117,6 +117,8 @@ void main() {
       () async {
     expect(
         await MethodChannelAppNotificationPort().requestExactTiming(), isTrue);
-    expect(await const NoOpNotificationPort().requestExactTiming(), isTrue);
+    // Nothing to ask where notifications already arrive on time: the no-op
+    // port does not claim the capability.
+    expect(const NoOpNotificationPort() is ExactNotificationTiming, isFalse);
   });
 }
