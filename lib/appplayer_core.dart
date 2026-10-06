@@ -144,4 +144,3 @@ export 'src/notification/notification_port.dart';
 
 // Exceptions
 export 'src/exceptions.dart';
-export 'src/licenses/open_source_licenses.dart';

@@ -172,6 +172,12 @@ class AppPlayerCoreService {
   late final BundleInstallerAdapter _bundleInstaller;
   late final AppMetadataProvider _metadataProvider;
   late final String _bundleInstallRoot;
+
+  /// Where the kernel keeps its knowledge-bundle list: next to the installed
+  /// bundles when they live in a directory, nowhere when the host supplied
+  /// storage instead (a browser has no directory — the list is rebuilt as
+  /// bundles open, so it is kept in memory).
+  String? _bundleRegistryDir;
   late final SettingsStore _settingsStore;
 
   // Platform integration foundation (FR-PLATFORM). Constructed in
@@ -610,6 +616,7 @@ class AppPlayerCoreService {
     _credentialVault = credentialVault ?? const NoopCredentialVault();
     _storage = storage;
     _bundleInstallRoot = bundleInstallRoot;
+    _bundleRegistryDir = bundleInstallStore == null ? bundleInstallRoot : null;
     _kv = kvStorage ?? InMemoryKvStoragePort();
     _kbRecords = KvKbRecordStore(_kv);
     _appIdOf = appIdOf;
@@ -763,7 +770,7 @@ class AppPlayerCoreService {
         kvStorage: _kv,
         // Co-locate the BM25 retrieval store with the bundle install
         // root so it is cleaned up alongside the bundles themselves.
-        bundleRegistryStorageDir: bundleInstallRoot,
+        bundleRegistryStorageDir: _bundleRegistryDir,
         // Outbound MCP client surface the `mcp.*` tools drive. Holds no
         // connection until an app calls `mcp.connect`, so booting with it
         // is free for apps that never reach out. Separate from the UI's

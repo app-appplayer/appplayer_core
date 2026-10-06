@@ -1,3 +1,11 @@
+## [0.3.0] - 2026-10-06
+
+### Breaking
+- `OpenSourceLicenses` and the `tool/licenses/` generators are removed. They are the `open_source_licenses` recipe (`os/core/brain_kernel/recipes/open_source_licenses`) now, with the same API, asset format and generators, so apps and Studio share one copy. An app depends on the recipe and imports `package:open_source_licenses/open_source_licenses.dart` in place of the core.
+
+### Fixed
+- The kernel boots on a host that keeps installed bundles in storage (`bundleInstallStore` — a browser). Boot passed `bundleInstallRoot`, a placeholder on such a host, as the directory for the kernel's knowledge-bundle list; reading it threw `Unsupported operation: _Namespace` and the core came up without its kernel — no kernel tools, no bundle session bridge, no bundle activation. Such a host now gives the kernel no directory, and the list is kept in memory (it is rebuilt as bundles open). Needs brain_kernel with `KnowledgeBundleRegistry.inMemory()`.
+
 ## [0.2.3] - 2026-10-04
 
 ### Fixed
