@@ -44,7 +44,7 @@ class MockMcpServer {
 
   void withToolResponse(String name, Map<String, dynamic> response) {
     when(() => client.callTool(name, any())).thenAnswer(
-      (_) async => CallToolResult([
+      (_) async => CallToolResult(content: [
         TextContent(text: jsonEncode(response)),
       ]),
     );

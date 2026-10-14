@@ -166,8 +166,9 @@ class ApplicationLoader {
   ) async {
     final page = await client.readResource(uri);
     if (page.contents.isEmpty) return <String, dynamic>{};
-    final text = page.contents.first.text ?? '{}';
-    final decoded = jsonDecode(text);
+    // Text contents always carry text; an empty one is an empty page.
+    final text = page.contents.first.text;
+    final decoded = jsonDecode(text == null || text.isEmpty ? '{}' : text);
     final map = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
     return transform == null ? map : transform(map);
   }

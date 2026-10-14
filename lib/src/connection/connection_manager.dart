@@ -33,6 +33,15 @@ typedef ClientConnector = Future<Client> Function(TransportConfig transport);
 /// no-auth servers are untouched.
 typedef ServerReGrant = Future<ServerConfig?> Function(ServerConfig stale);
 
+/// A layer the host puts between a server's [Client] and everyone who uses
+/// it — to add what this host's calls carry for that server (platform spec
+/// 24 §5.3: a workspace connection's chosen unit and short tickets). Answer
+/// [connected] unchanged for servers that need nothing.
+typedef ServerClientLayer = Client Function(
+  ServerConfig server,
+  Client connected,
+);
+
 /// Connects a streamable-HTTP server whose requests carry host-answered
 /// credentials. Injected in tests; the default builds the protocol client on
 /// the transport directly, the one place a per-request header provider and an
@@ -53,18 +62,17 @@ Future<Client> _defaultAuthorizedConnector(
     version: '1.0.0',
   );
   final client = McpClient.createClient(config);
-  final connection = await StreamableHttpClientTransport.create(
-    baseUrl: transport.baseUrl,
-    headers: transport.headers,
-    headersProvider: headers,
-    timeout: transport.timeout,
-    maxConcurrentRequests: transport.maxConcurrentRequests,
-    useHttp2: transport.useHttp2,
-    httpClient: httpClient,
-    terminateOnClose: transport.terminateOnClose,
-  );
+  // A fresh transport per attempt: one that failed to connect is closed.
   await client.connectWithRetry(
-    connection,
+    () => StreamableHttpClientTransport.create(
+      baseUrl: transport.baseUrl,
+      headers: transport.headers,
+      headersProvider: headers,
+      timeout: transport.timeout,
+      maxConcurrentRequests: transport.maxConcurrentRequests,
+      httpClient: httpClient,
+      terminateOnClose: transport.terminateOnClose,
+    ),
     maxRetries: config.maxRetries,
     delay: config.retryDelay,
   );
@@ -122,6 +130,10 @@ class ConnectionManager extends ChangeNotifier {
 
   /// Other headers the host sends to served addresses (see [ServingHeaders]).
   ServingHeaders? servingHeaders;
+
+  /// The host's layer over each server's client (see [ServerClientLayer]).
+  /// Null = the client the connector built is used as it is.
+  ServerClientLayer? clientLayer;
 
   /// The person's language, when the host knows it better than the device —
   /// a tier with its own language setting answers it (FR-CONN-011). Asked when
@@ -236,7 +248,7 @@ class ConnectionManager extends ChangeNotifier {
       // lends the connection to. Whatever the connector built is shared through
       // one layer, so the device does not feel them (23 §6.1).
       final client = SharedClient(
-        connected,
+        clientLayer?.call(server, connected) ?? connected,
         _sharingFor(server),
         onUnauthorized: onUnauthorized,
       );

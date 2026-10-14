@@ -114,7 +114,7 @@ void main() {
         // First two reads race a cold server (throw / empty); the third
         // succeeds — mirrors "enter/exit a few times and it finally shows".
         if (calls == 1) throw StateError('stream not ready');
-        if (calls == 2) return const ReadResourceResult(contents: []);
+        if (calls == 2) return ReadResourceResult(contents: []);
         return _jsonResult('{"name":"Foo","version":"2.1.0"}');
       });
       final provider = AppMetadataProvider();

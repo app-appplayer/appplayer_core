@@ -23,7 +23,7 @@ void main() {
     test('TC-TOOL-001: normal call returns decoded JSON map', () async {
       when(() => client.listTools()).thenAnswer((_) async => [_tool('incr')]);
       when(() => client.callTool('incr', any())).thenAnswer(
-        (_) async => CallToolResult([const TextContent(text: '{"count":5}')]),
+        (_) async => CallToolResult(content: [TextContent(text: '{"count":5}')]),
       );
 
       final result = await ToolDispatcher().call(
@@ -50,7 +50,7 @@ void main() {
     test('TC-TOOL-003: multi-key response returned verbatim', () async {
       when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenAnswer((_) async =>
-          CallToolResult([const TextContent(text: '{"a":1,"b":"x"}')]));
+          CallToolResult(content: [TextContent(text: '{"a":1,"b":"x"}')]));
       final result = await ToolDispatcher().call(
         client: client,
         tool: 't',
@@ -62,7 +62,7 @@ void main() {
     test('TC-TOOL-004: empty content — returns null', () async {
       when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any()))
-          .thenAnswer((_) async => const CallToolResult([]));
+          .thenAnswer((_) async => CallToolResult(content: []));
       final result = await ToolDispatcher().call(
         client: client,
         tool: 't',
@@ -74,7 +74,7 @@ void main() {
     test('TC-TOOL-006: parse failure — logged, returns null', () async {
       when(() => client.listTools()).thenAnswer((_) async => [_tool('t')]);
       when(() => client.callTool('t', any())).thenAnswer(
-          (_) async => CallToolResult([const TextContent(text: 'not-json')]));
+          (_) async => CallToolResult(content: [TextContent(text: 'not-json')]));
       final result = await ToolDispatcher().call(
         client: client,
         tool: 't',
@@ -89,8 +89,8 @@ void main() {
       when(() => client.listTools())
           .thenAnswer((_) async => [_tool('contact.leave')]);
       when(() => client.callTool('contact.leave', any())).thenAnswer(
-          (_) async => CallToolResult(
-              [const TextContent(text: 'ERR_CONTACT_WAIT')],
+          (_) async => CallToolResult(content: 
+              [TextContent(text: 'ERR_CONTACT_WAIT')],
               isError: true));
       final result = await ToolDispatcher().call(
         client: client,

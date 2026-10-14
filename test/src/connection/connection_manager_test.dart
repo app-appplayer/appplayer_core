@@ -571,6 +571,37 @@ void main() {
       verifyNever(() => client.ping());
     });
 
+    test(
+        'TC-CONN-040: the host layer sits between the server client and its '
+        'users, and is handed the server it is for', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      ServerConfig? seen;
+      Client? layered;
+      final m = ConnectionManager(connector: (_) async => client)
+        ..clientLayer = (server, connected) {
+          seen = server;
+          return layered = _Layer(connected);
+        };
+
+      await m.connect(_server());
+
+      expect(seen?.id, 's1');
+      final shared = m.getConnection('s1')!.client! as SharedClient;
+      expect(identical(shared.inner, layered), isTrue);
+    });
+
+    test('TC-CONN-041: no layer leaves the built client as it is', () async {
+      final client = mockClient();
+      when(() => client.disconnect()).thenReturn(null);
+      final m = ConnectionManager(connector: (_) async => client);
+
+      await m.connect(_server());
+
+      final shared = m.getConnection('s1')!.client! as SharedClient;
+      expect(identical(shared.inner, client), isTrue);
+    });
+
     test('TC-CONN-002: connect reuses existing connected', () async {
       var calls = 0;
       final client = mockClient();
@@ -813,4 +844,8 @@ void main() {
           {'Accept-Language': device});
     });
   });
+}
+
+class _Layer extends DelegatingClient {
+  _Layer(super.inner);
 }

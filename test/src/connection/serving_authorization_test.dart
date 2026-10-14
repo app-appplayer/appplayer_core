@@ -15,7 +15,8 @@ import 'package:http/testing.dart';
 import 'package:mcp_client/mcp_client.dart' hide ConnectionState, Logger;
 
 /// A server that refuses `tools/call` for want of a person [refusals] times,
-/// the way `mcp_client` reports an HTTP 401 (`-32001`), then answers.
+/// the way `mcp_client` reports an HTTP 401 or 403
+/// (`McpProtocol.errorAuthenticationRequired`), then answers.
 class _Server implements ClientTransport {
   _Server({this.refusals = 0});
 
@@ -41,7 +42,10 @@ class _Server implements ClientTransport {
         scheduleMicrotask(() => _in.add({
               'jsonrpc': '2.0',
               'id': id,
-              'error': {'code': -32001, 'message': 'Authentication required'},
+              'error': {
+                'code': McpProtocol.errorAuthenticationRequired,
+                'message': 'Authentication required',
+              },
             }));
         return;
       }

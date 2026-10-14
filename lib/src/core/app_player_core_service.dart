@@ -42,6 +42,7 @@ import '../bundle/bundle_tool_handlers.dart';
 import '../js/atoms/bundle_atom.dart';
 import '../js/atoms/kb_atom.dart';
 import '../js/atoms/mcp_atom.dart';
+import '../js/atoms/member_atom.dart';
 import '../js/js_tool_runtime.dart';
 import '../settings/settings_store.dart';
 import '../bundle/bundle_entry_point.dart';
@@ -163,6 +164,8 @@ class AppPlayerCoreService {
   /// account; null otherwise. Asked each time a bundle session opens, so a
   /// sign-in or sign-out between sessions is honoured.
   KbAccountRecords? Function()? _kbAccountOf;
+  String? Function()? _kbWriteUnit;
+  WorkspaceMemberPort? Function(String appId)? _memberPortOf;
 
   /// The app identity a bundle's `host.kb` state is keyed by, from the host.
   String? Function(String bundleId)? _appIdOf;
@@ -575,6 +578,9 @@ class AppPlayerCoreService {
     // The person's language for served addresses, when the host has its own
     // language setting. Null = the device's languages (FR-CONN-011).
     String? Function()? requestLanguage,
+    // What this host's calls carry for a server — a layer over its client
+    // (see [ServerClientLayer]). Null = none.
+    ServerClientLayer? serverClientLayer,
     RuntimeCapabilities runtimeCapabilities = RuntimeCapabilities.none,
     McpLogMessageHandler? onMcpLogMessage,
     SettingsStore? settingsStore,
@@ -601,6 +607,14 @@ class AppPlayerCoreService {
     // bundle session opens; a null hook or a null answer keeps them on this
     // device.
     KbAccountRecords? Function()? kbAccountRecords,
+    // The workspace unit chosen right now (platform spec 24 §6.3), read when a
+    // bundle writes a `host.kb` record to the account. The account stamps the
+    // record's unit from it (20 §2.9). Null keeps the account's default.
+    String? Function()? kbWriteUnit,
+    // Who is using a workspace app and what they may do (platform spec 24
+    // §7.2), asked per app identity when a bundle session opens. A null hook
+    // or a null answer leaves `host.member` out for that app.
+    WorkspaceMemberPort? Function(String appId)? memberPortOf,
     // Debug MCP (FR-DEBUG) — a desktop-only, settings-gated MCP endpoint
     // for test automation (screenshot / tree / tap / type). The desktop
     // gate is enforced here in core, so hosts may pass the raw user pref.
@@ -621,10 +635,13 @@ class AppPlayerCoreService {
     _kbRecords = KvKbRecordStore(_kv);
     _appIdOf = appIdOf;
     _kbAccountOf = kbAccountRecords;
+    _kbWriteUnit = kbWriteUnit;
+    _memberPortOf = memberPortOf;
     _conn = ConnectionManager(logger: _logger, connector: _testConnector)
       ..servingAuthorization = servingAuthorization
       ..servingHeaders = servingHeaders
-      ..requestLanguage = requestLanguage;
+      ..requestLanguage = requestLanguage
+      ..clientLayer = serverClientLayer;
     // UI DSL §6.13 — the platform powers this host can actually perform. A
     // tier that wires none is still conformant: every affected widget reports
     // the absence instead of drawing a facsimile of it working.
@@ -1524,6 +1541,7 @@ class AppPlayerCoreService {
 
     final runtime = JsToolRuntime();
     final session = _sessions[bundleId];
+    final memberPort = _memberPortOf?.call(_appIdFor(bundleId));
     final atoms = <AtomCategory>[
       McpAtom(_toolDispatcher,
           bridge: _bridge, session: session, scope: bundleId),
@@ -1535,6 +1553,11 @@ class AppPlayerCoreService {
         records: _kbRecordsForSession(),
         engine: _kernel?.queryEngine,
       )),
+      // Present on every host: one with no workspace answers that the
+      // person is in none. Missing, a workspace app opened there failed on
+      // its first call (`host.member` undefined) and drew nothing
+      // (measured 2026-10-14 on Standard).
+      MemberAtom(memberPort ?? const OutsideWorkspace()),
     ];
     // When the manifest declares `requires.builtinAtoms`, expose only
     // that set. Otherwise expose every atom the core provides. Host
@@ -1787,7 +1810,7 @@ class AppPlayerCoreService {
     final account = _kbAccountOf?.call();
     return account == null
         ? _kbRecords
-        : AccountKbRecordStore(account: account, kv: _kv);
+        : AccountKbRecordStore(account: account, kv: _kv, unitOf: _kbWriteUnit);
   }
 
   Future<void> uninstallBundle(String bundleId) async {

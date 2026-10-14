@@ -55,23 +55,24 @@ class ConnectionSharing {
 /// Notifications: this wrapper holds the inner client's single handler slot
 /// per method, runs its own bookkeeping first and then the consumer's handler.
 /// To a consumer it is the same one-handler-per-method client as before.
-/// Asked when a call was refused for want of a signed-in person (HTTP 401,
-/// reported as `-32001`). True means try the call once more.
+/// Asked when a call was refused for want of a signed-in person (HTTP 401 or
+/// 403, reported as [McpProtocol.errorAuthenticationRequired]). True means try
+/// the call once more.
 typedef UnauthorizedHandler = Future<bool> Function();
 
-/// The client-internal code `mcp_client` reports an HTTP 401 with.
-const int kAuthenticationRequiredCode = -32001;
+/// The code `mcp_client` reports an HTTP 401 or 403 with.
+const int kAuthenticationRequiredCode = McpProtocol.errorAuthenticationRequired;
 
-class SharedClient implements Client {
-  SharedClient(this.inner, this.sharing, {this.onUnauthorized}) {
+class SharedClient extends DelegatingClient {
+  SharedClient(super.inner, this.sharing, {this.onUnauthorized}) {
     for (final method in _watched) {
       _install(method);
     }
     _disconnectSub = inner.onDisconnect.listen((_) => _failWaiting());
   }
 
-  /// The connector's client. Everything not governed here goes straight to it.
-  final Client inner;
+  // [inner] is the connector's client: everything not governed here goes
+  // straight to it.
   final ConnectionSharing sharing;
 
   /// What to do when a tool call is refused for want of a person. Null leaves
@@ -244,23 +245,85 @@ class SharedClient implements Client {
 
   // ----------------------------------------------------- governed requests
 
-  @override
-  Future<List<Tool>> listTools() => _list(_toolsList, () => inner.listTools());
+  // A request that carries `_meta` speaks for one caller (its access, its
+  // unit), and one that carries options (a timeout, a progress handler) is
+  // shaped for one caller: what it gets back is that caller's, so it is never
+  // served from, joined to, or kept in what is shared between consumers.
+
+  static bool _personal(Map<String, dynamic>? meta, RequestOptions? options) =>
+      meta != null || options != null;
 
   @override
-  Future<List<Resource>> listResources() =>
-      _list(_resourcesList, () => inner.listResources());
+  Future<List<Tool>> listTools(
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _personal(meta, options)
+          ? _gated(() => inner.listTools(meta: meta, options: options))
+          : _list(_toolsList, () => inner.listTools());
 
   @override
-  Future<List<ResourceTemplate>> listResourceTemplates() =>
-      _list(_templatesList, () => inner.listResourceTemplates());
+  Future<List<Resource>> listResources(
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _personal(meta, options)
+          ? _gated(() => inner.listResources(meta: meta, options: options))
+          : _list(_resourcesList, () => inner.listResources());
 
   @override
-  Future<List<Prompt>> listPrompts() =>
-      _list(_promptsList, () => inner.listPrompts());
+  Future<List<ResourceTemplate>> listResourceTemplates(
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _personal(meta, options)
+          ? _gated(
+              () => inner.listResourceTemplates(meta: meta, options: options))
+          : _list(_templatesList, () => inner.listResourceTemplates());
 
   @override
-  Future<ReadResourceResult> readResource(String uri) async {
+  Future<List<Prompt>> listPrompts(
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _personal(meta, options)
+          ? _gated(() => inner.listPrompts(meta: meta, options: options))
+          : _list(_promptsList, () => inner.listPrompts());
+
+  // One page is a cursor's answer, not the list: it is passed through, never
+  // kept.
+
+  @override
+  Future<ListToolsResult> listToolsPage(
+          {String? cursor,
+          Map<String, dynamic>? meta,
+          RequestOptions? options}) =>
+      _gated(() =>
+          inner.listToolsPage(cursor: cursor, meta: meta, options: options));
+
+  @override
+  Future<ListResourcesResult> listResourcesPage(
+          {String? cursor,
+          Map<String, dynamic>? meta,
+          RequestOptions? options}) =>
+      _gated(() => inner.listResourcesPage(
+          cursor: cursor, meta: meta, options: options));
+
+  @override
+  Future<ListResourceTemplatesResult> listResourceTemplatesPage(
+          {String? cursor,
+          Map<String, dynamic>? meta,
+          RequestOptions? options}) =>
+      _gated(() => inner.listResourceTemplatesPage(
+          cursor: cursor, meta: meta, options: options));
+
+  @override
+  Future<ListPromptsResult> listPromptsPage(
+          {String? cursor,
+          Map<String, dynamic>? meta,
+          RequestOptions? options}) =>
+      _gated(() =>
+          inner.listPromptsPage(cursor: cursor, meta: meta, options: options));
+
+  @override
+  Future<ReadResourceResult> readResource(String uri,
+      {Map<String, dynamic>? meta, RequestOptions? options}) async {
+    if (_personal(meta, options)) {
+      return _gated(
+          () => inner.readResource(uri, meta: meta, options: options));
+    }
     if (sharing.surfaceFixed && sharing.isDocument(uri)) {
       return (await _keep(_readKey(uri), () => inner.readResource(uri)))
           as ReadResourceResult;
@@ -286,35 +349,53 @@ class SharedClient implements Client {
   @override
   Future<CallToolResult> callTool(
     String name,
-    Map<String, dynamic> toolArguments,
-  ) =>
-      _withSignIn(() => _gated(() => inner.callTool(name, toolArguments)));
+    Map<String, dynamic> toolArguments, {
+    Map<String, dynamic>? meta,
+    RequestOptions? options,
+  }) =>
+      _withSignIn(() => _gated(() => inner.callTool(name, toolArguments,
+          meta: meta, options: options)));
+
+  @override
+  Future<Task> callToolAsTask(String name, Map<String, dynamic> toolArguments,
+          {int? ttl, Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _withSignIn(() => _gated(() => inner.callToolAsTask(name, toolArguments,
+          ttl: ttl, meta: meta, options: options)));
 
   @override
   Future<ToolCallTracking> callToolWithTracking(
     String name,
     Map<String, dynamic> arguments, {
     bool trackProgress = true,
+    Map<String, dynamic>? meta,
+    RequestOptions? options,
   }) =>
       _withSignIn(() => _gated(() => inner.callToolWithTracking(name, arguments,
-          trackProgress: trackProgress)));
+          trackProgress: trackProgress, meta: meta, options: options)));
 
   @override
   Future<ReadResourceResult> getResourceWithTemplate(
     String templateUri,
-    Map<String, dynamic> params,
-  ) =>
-      _gated(() => inner.getResourceWithTemplate(templateUri, params));
+    Map<String, dynamic> params, {
+    Map<String, dynamic>? meta,
+    RequestOptions? options,
+  }) =>
+      _gated(() => inner.getResourceWithTemplate(templateUri, params,
+          meta: meta, options: options));
 
   @override
-  Future<void> subscribeResource(String uri) async {
-    await _gated(() => inner.subscribeResource(uri));
+  Future<void> subscribeResource(String uri,
+      {Map<String, dynamic>? meta, RequestOptions? options}) async {
+    await _gated(
+        () => inner.subscribeResource(uri, meta: meta, options: options));
     _subscribed.add(uri);
   }
 
   @override
-  Future<void> unsubscribeResource(String uri) async {
-    await _gated(() => inner.unsubscribeResource(uri));
+  Future<void> unsubscribeResource(String uri,
+      {Map<String, dynamic>? meta, RequestOptions? options}) async {
+    await _gated(
+        () => inner.unsubscribeResource(uri, meta: meta, options: options));
     _subscribed.remove(uri);
     _lastPushed.remove(uri);
   }
@@ -323,40 +404,64 @@ class SharedClient implements Client {
   Future<GetPromptResult> getPrompt(
     String name, [
     Map<String, dynamic>? promptArguments,
+    Map<String, dynamic>? meta,
+    RequestOptions? options,
   ]) =>
-      _gated(() => inner.getPrompt(name, promptArguments));
+      _gated(() => inner.getPrompt(name, promptArguments, meta, options));
 
   @override
-  Future<CompletionResult> complete(
+  Future<CompleteResult> complete(
     Map<String, dynamic> ref,
     Map<String, dynamic> argument, {
     Map<String, dynamic>? context,
+    Map<String, dynamic>? meta,
+    RequestOptions? options,
   }) =>
-      _gated(() => inner.complete(ref, argument, context: context));
+      _gated(() => inner.complete(ref, argument,
+          context: context, meta: meta, options: options));
 
   @override
-  Future<void> setLoggingLevel(McpLogLevel level) =>
-      _gated(() => inner.setLoggingLevel(level));
+  Future<void> setLoggingLevel(McpLogLevel level,
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _gated(
+          () => inner.setLoggingLevel(level, meta: meta, options: options));
 
   @override
-  Future<DiscoverResult> discover() => _gated(inner.discover);
+  Future<DiscoverResult> discover({RequestOptions? options}) =>
+      _gated(() => inner.discover(options: options));
 
   @override
-  Future<Task> getTask(String taskId) => _gated(() => inner.getTask(taskId));
+  Future<GetTaskResult> getTask(String taskId,
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _gated(() => inner.getTask(taskId, meta: meta, options: options));
 
   @override
-  Future<void> updateTask(String taskId, Map<String, dynamic> inputResponses) =>
-      _gated(() => inner.updateTask(taskId, inputResponses));
+  Future<void> updateTask(String taskId, Map<String, dynamic> inputResponses,
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _gated(() => inner.updateTask(taskId, inputResponses,
+          meta: meta, options: options));
 
   @override
-  Future<void> cancelTask(String taskId) =>
-      _gated(() => inner.cancelTask(taskId));
+  Future<Task?> cancelTask(String taskId,
+          {Map<String, dynamic>? meta, RequestOptions? options}) =>
+      _gated(() => inner.cancelTask(taskId, meta: meta, options: options));
+
+  @override
+  Future<Map<String, dynamic>> taskResult(String taskId,
+          {RequestOptions? options}) =>
+      _gated(() => inner.taskResult(taskId, options: options));
+
+  @override
+  Future<ListTasksResult> listTasksPage(
+          {String? cursor, RequestOptions? options}) =>
+      _gated(() => inner.listTasksPage(cursor: cursor, options: options));
 
   /// The liveness probe: never queued behind the traffic it is checking on.
   @override
-  Future<void> ping() async {
+  Future<void> ping(
+      {Map<String, dynamic>? meta, RequestOptions? options}) async {
     try {
-      await inner.ping();
+      await inner.ping(meta: meta, options: options);
       _touch();
     } on McpError catch (e) {
       if (e.code != null) _touch();
@@ -395,24 +500,29 @@ class SharedClient implements Client {
 
   @override
   void onResourceContentUpdated(
-    Function(String uri, ResourceContentInfo content) handler,
+    Function(String uri, ResourceContents content) handler,
   ) =>
       onNotification('notifications/resources/updated', (params) {
-        final contentData = params['content'] as Map<String, dynamic>;
-        handler(
-            params['uri'] as String, ResourceContentInfo.fromJson(contentData));
+        final contentData = params['content'];
+        if (contentData is! Map) return;
+        handler(params['uri'] as String,
+            ResourceContents.fromJson(Map<String, Object?>.from(contentData)));
       });
 
   @override
+  void onProgressNotification(
+          void Function(ProgressNotificationParams progress) handler) =>
+      onNotification(
+          'notifications/progress',
+          (params) => handler(ProgressNotificationParams.fromJson(
+              Map<String, Object?>.from(params))));
+
+  @override
   void onProgress(
-    Function(String requestId, double progress, String message) handler,
+    Function(String progressToken, double progress, String message) handler,
   ) =>
-      onNotification('notifications/progress', (params) {
-        final requestId =
-            params['requestId'] as String? ?? params['request_id'] as String;
-        handler(requestId, params['progress'] as double,
-            params['message'] as String);
-      });
+      onProgressNotification((p) => handler(
+          '${p.progressToken}', p.progress.toDouble(), p.message ?? ''));
 
   @override
   void onLogging(
@@ -437,6 +547,32 @@ class SharedClient implements Client {
   String get version => inner.version;
   @override
   String? get description => inner.description;
+  @override
+  String? get title => inner.title;
+  @override
+  String? get websiteUrl => inner.websiteUrl;
+  @override
+  List<McpIcon>? get icons => inner.icons;
+  @override
+  Duration get requestTimeout => inner.requestTimeout;
+  @override
+  Duration get maxRequestTimeout => inner.maxRequestTimeout;
+  @override
+  ProtocolEra get era => inner.era;
+  @override
+  Duration? get eraProbeTimeout => inner.eraProbeTimeout;
+  @override
+  set eraProbeTimeout(Duration? value) => inner.eraProbeTimeout = value;
+  @override
+  bool get validateToolOutput => inner.validateToolOutput;
+  @override
+  set validateToolOutput(bool value) => inner.validateToolOutput = value;
+  @override
+  bool get cacheResults => inner.cacheResults;
+  @override
+  set cacheResults(bool value) => inner.cacheResults = value;
+  @override
+  Stream<String> get onElicitationComplete => inner.onElicitationComplete;
   @override
   ClientCapabilities get capabilities => inner.capabilities;
   @override
@@ -463,23 +599,21 @@ class SharedClient implements Client {
   List<Root> get roots => inner.roots;
 
   @override
-  Future<void> connect(ClientTransport transport,
-          {bool statelessMode = false}) =>
-      inner.connect(transport, statelessMode: statelessMode);
-  @override
   Future<void> connectWithRetry(
-    ClientTransport transport, {
+    Future<ClientTransport> Function() openTransport, {
     int maxRetries = 3,
     Duration delay = const Duration(seconds: 2),
+    ProtocolEra era = ProtocolEra.auto,
   }) =>
-      inner.connectWithRetry(transport, maxRetries: maxRetries, delay: delay);
+      inner.connectWithRetry(openTransport,
+          maxRetries: maxRetries, delay: delay, era: era);
   @override
   Future<void> initialize() => inner.initialize();
   @override
   Task? taskFromResult(Map<String, dynamic> result) =>
       inner.taskFromResult(result);
   @override
-  void notifyCancelled(String requestId, {String? reason}) =>
+  void notifyCancelled(Object requestId, {String? reason}) =>
       inner.notifyCancelled(requestId, reason: reason);
   @override
   void notifyProgress(
@@ -492,7 +626,8 @@ class SharedClient implements Client {
           total: total, message: message);
   @override
   void onSamplingRequest(
-    Future<CreateMessageResult> Function(CreateMessageRequest request) handler,
+    Future<CreateMessageResult> Function(CreateMessageRequestParams request)
+        handler,
   ) =>
       inner.onSamplingRequest(handler);
   @override
@@ -507,7 +642,7 @@ class SharedClient implements Client {
       inner.onElicitationRequest(handler);
   @override
   void onElicitationRequestTyped(
-    Future<ElicitationResponse> Function(ElicitationRequest request) handler,
+    Future<ElicitResult> Function(ElicitRequestParams request) handler,
   ) =>
       inner.onElicitationRequestTyped(handler);
   @override
@@ -531,6 +666,18 @@ class SharedClient implements Client {
     _failWaiting();
     inner.disconnect();
   }
+
+  @override
+  void clearResultCache() => inner.clearResultCache();
+
+  @override
+  void startKeepAlive(Duration interval,
+          {Duration timeout = const Duration(seconds: 10),
+          int maxMissed = 1}) =>
+      inner.startKeepAlive(interval, timeout: timeout, maxMissed: maxMissed);
+
+  @override
+  void stopKeepAlive() => inner.stopKeepAlive();
 
   @override
   void dispose() {

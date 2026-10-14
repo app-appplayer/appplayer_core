@@ -53,6 +53,7 @@ export 'src/js/js_tool_runtime.dart';
 export 'src/js/atoms/agent_atom.dart';
 export 'src/js/atoms/bundle_atom.dart';
 export 'src/js/atoms/mcp_atom.dart';
+export 'src/js/atoms/member_atom.dart';
 
 // Debug MCP surface — desktop-only, settings-gated test-automation
 // endpoint (screenshot / tree / tap / type). Wired through

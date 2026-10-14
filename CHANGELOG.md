@@ -1,3 +1,28 @@
+## [0.4.1] - 2026-10-14
+
+### Added
+- `ServerClientLayer` and `AppPlayerCoreService.initialize(serverClientLayer:)` — a host puts a layer over each server's `Client` (`ConnectionManager.clientLayer`), for what its calls carry for that server (platform spec 24 §5.3). No layer, no change.
+
+### Changed
+- `flutter_mcp_ui_runtime` ^0.8.6 and `flutter_mcp_ui_core` ^0.6.12: every Material icon name draws, and a theme takes every color role.
+
+### Fixed
+- `host.member` is present on every host. A host that gives no member port answers that the person is in no workspace (`me()` null, `can()` false, `people()` empty), so a workspace app opened there shows that instead of failing on its first call.
+
+## [0.4.0] - 2026-10-13
+
+### Breaking
+- Built on MCP 3.0: `mcp_client` · `mcp_server` ^3.0.0, `flutter_mcp_ui_runtime` ^0.8.5, `flutter_mcp_ui_core` ^0.6.11, `mcp_bundle` ^0.4.11, and `brain_kernel` ^0.3.0. The re-exported MCP types are the 3.0 ones.
+- `SharedClient` extends `DelegatingClient`: every `Client` member it does not take over is passed through, including those added by `mcp_client`.
+
+### Added
+- `WorkspaceMemberPort` and the `host.member.*` atom — who is using a workspace app and what they may do (platform spec 24 §7.2). `AppPlayerCoreService.initialize(memberPortOf:)` answers it per app identity.
+- `AppPlayerCoreService.initialize(kbWriteUnit:)` — the workspace unit a bundle's `host.kb` account write is stamped with (platform spec 24 §6.3).
+
+### Fixed
+- A streamable-HTTP connection attempt that fails is closed and the next attempt builds a fresh transport.
+- An empty page resource reads as an empty page instead of failing to decode.
+
 ## [0.3.0] - 2026-10-06
 
 ### Breaking

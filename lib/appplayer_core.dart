@@ -22,7 +22,8 @@ export 'src/connection/connection_result.dart';
 export 'src/connection/connection_state.dart';
 // Durable-reconnect token re-grant hook (host-provided). Only the typedef is
 // public; the ConnectionManager itself stays internal.
-export 'src/connection/connection_manager.dart' show ServerReGrant;
+export 'src/connection/connection_manager.dart'
+    show ServerClientLayer, ServerReGrant;
 export 'src/connection/serving_authorization.dart'
     show ServingAuthorization, ServingHeaders;
 export 'src/connection/connection_health_monitor.dart' show HealthMonitorConfig;
@@ -42,6 +43,8 @@ export 'src/entry/http_entry_resolver.dart';
 export 'src/bundle/bundle_entry_point.dart';
 export 'src/bundle/bundle_fetcher.dart';
 export 'src/bundle/installed_app_bundle.dart';
+// What a host tells a workspace app about the person using it (spec 24 §7.2).
+export 'src/js/atoms/member_atom.dart' show WorkspaceMemberPort;
 
 // Dashboard handles
 export 'src/dashboard/dashboard_bundle.dart'

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0.0",
+  "manifest": {
+    "id": "com.example.member_probe",
+    "name": "Member Probe",
+    "version": "1.0.0",
+    "schemaVersion": "1.0.0",
+    "type": "application",
+    "entryPoint": "ui.app"
+  },
+  "tools": {
+    "schemaVersion": "1.0.0",
+    "tools": [
+      {
+        "name": "member.probe",
+        "description": "What host.member answers here.",
+        "kind": "js",
+        "target": {"entry": "tools/probe.js", "fn": "probe"},
+        "inputSchema": {"type": "object", "properties": {}}
+      }
+    ]
+  },
+  "requires": { "schemaVersion": "1.0.0", "builtinAtoms": ["member"] }
+}

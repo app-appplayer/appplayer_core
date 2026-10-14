@@ -175,7 +175,7 @@ void main() {
             Resource(uri: 'ui://app', name: 'app', description: ''),
           ]);
       when(() => client.readResource('ui://app/info')).thenAnswer(
-        (_) async => const ReadResourceResult(contents: [
+        (_) async => ReadResourceResult(contents: [
           ResourceContentInfo(
             uri: 'ui://app/info',
             mimeType: 'application/json',

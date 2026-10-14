@@ -51,7 +51,6 @@ void main() {
       final s = result as SseTransportConfig;
       expect(s.serverUrl, 'https://x');
       expect(s.bearerToken, 'tok');
-      expect(s.enableCompression, true);
       expect(s.heartbeatInterval, const Duration(seconds: 30));
     });
 
@@ -62,7 +61,6 @@ void main() {
       ));
       final s = result as SseTransportConfig;
       expect(s.heartbeatInterval, isNull);
-      expect(s.enableCompression, isFalse);
     });
 
     test('TC-TRANS-004: streamableHttp', () {
@@ -77,7 +75,6 @@ void main() {
       expect(result, isA<StreamableHttpTransportConfig>());
       final s = result as StreamableHttpTransportConfig;
       expect(s.baseUrl, 'https://api');
-      expect(s.useHttp2, false);
       expect(s.timeout, const Duration(seconds: 10));
       expect(s.terminateOnClose, false);
     });
