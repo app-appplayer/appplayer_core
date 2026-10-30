@@ -151,6 +151,24 @@ enum BundleAdaptReason {
   unknown,
 }
 
+/// A bundle declares host tools it cannot run without (`requires.builtinTools`)
+/// and this host does not provide some of them (platform spec 06 §③).
+///
+/// All-or-nothing: the bundle is not opened with part of what it needs. The
+/// missing names are carried so the shell can say which.
+class BundleRequirementsUnmetException extends AppPlayerException {
+  BundleRequirementsUnmetException({
+    required this.bundleId,
+    required this.missingTools,
+  }) : super(
+          'Bundle $bundleId needs host tools this host does not provide: '
+          '${missingTools.join(', ')}',
+        );
+
+  final String bundleId;
+  final List<String> missingTools;
+}
+
 class BundleAdaptException extends AppPlayerException {
   BundleAdaptException({
     required this.bundleId,

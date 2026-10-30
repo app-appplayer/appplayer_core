@@ -31,6 +31,14 @@ class NotificationAlarmReceiver : BroadcastReceiver() {
             intent.getStringExtra(NotificationBridge.EXTRA_TITLE) ?: "",
             intent.getStringExtra(NotificationBridge.EXTRA_BODY) ?: "",
             intent.getStringExtra(NotificationBridge.EXTRA_SOURCE) ?: "",
+            intent.getStringExtra(NotificationBridge.EXTRA_APP_NAME),
+            intent.getStringExtra(NotificationBridge.EXTRA_CHANNEL_ID)?.let {
+                NotificationBridge.ChannelSpec(
+                    it,
+                    intent.getStringExtra(NotificationBridge.EXTRA_CHANNEL_NAME) ?: it,
+                    intent.getStringExtra(NotificationBridge.EXTRA_CHANNEL_IMPORTANCE) ?: "normal",
+                )
+            },
         )
     }
 

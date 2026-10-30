@@ -40,6 +40,17 @@ class ToolDispatcher {
     _inProcess.addAll(tools);
   }
 
+  /// Put a guard in front of an already registered tool: [wrap] receives the
+  /// handler now bound to [name] and returns the one that replaces it.
+  /// A no-op for a name that is not registered.
+  void guardInProcessTool(
+    String name,
+    InProcessToolHandler Function(InProcessToolHandler inner) wrap,
+  ) {
+    final inner = _inProcess[name];
+    if (inner != null) _inProcess[name] = wrap(inner);
+  }
+
   /// Unregister a tool — used when the tool surface changes
   /// dynamically.
   void unregisterInProcessTool(String name) {

@@ -16,6 +16,8 @@ class AppNotification {
     required this.title,
     required this.body,
     required this.source,
+    this.appName,
+    this.channel,
     this.at,
     this.expiresAt,
   });
@@ -38,6 +40,34 @@ class AppNotification {
 
   /// The app that posted it — used to route a tap back to that app.
   final AppHandle source;
+
+  /// The name the person knows the app by. The notification shows it as its
+  /// source and the app's channels are filed under it, so an app cannot pass
+  /// as the system (platform spec 26 §3.3). Null falls back to the app's key.
+  final String? appName;
+
+  /// The app's channel this goes to — null is the app's default channel. A
+  /// channel is the app's own (spec 26 §3.2); it can never be the system's.
+  final AppNotificationChannel? channel;
+}
+
+/// How loudly a channel interrupts.
+enum NotificationImportance { low, normal, high }
+
+/// One of an app's notification channels (spec 26 §3.2): a name the person
+/// sees in the system settings and how loudly it interrupts.
+class AppNotificationChannel {
+  const AppNotificationChannel({
+    required this.id,
+    required this.name,
+    this.importance = NotificationImportance.normal,
+  });
+
+  /// Unique within the app. The platform channel id is derived from it and the
+  /// app, so two apps never share a channel.
+  final String id;
+  final String name;
+  final NotificationImportance importance;
 }
 
 /// Named `AppNotificationPort` (not `NotificationPort`) to avoid colliding
@@ -51,6 +81,18 @@ abstract class AppNotificationPort {
   /// Emits the source app when the user taps its notification, so the host
   /// can open that app (FR-NOTIF-004).
   Stream<AppHandle> get taps;
+}
+
+/// A port that creates an app's channels ahead of any notification, so a push
+/// that names one finds it (platform spec 26 §3.2). A capability a port has or
+/// lacks, like [ExactNotificationTiming]; a caller matches for it:
+/// `if (port case final NotificationChannelDeclaration d) await d.declareChannels(…);`
+abstract class NotificationChannelDeclaration {
+  Future<void> declareChannels({
+    required AppHandle source,
+    required String appName,
+    required List<AppNotificationChannel> channels,
+  });
 }
 
 /// A port on a platform where on-time delivery of notifications posted for

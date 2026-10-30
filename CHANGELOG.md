@@ -1,3 +1,16 @@
+## [0.4.2] - 2026-10-31
+
+### Added
+- `AppPlayerCoreService.initialize(factGraph:)` — the L0 fact graph the kernel writes to (platform spec 30). A host that keeps knowledge across restarts builds a `FactGraphRuntime` over a durable store and hands it here; null keeps the in-memory graph as before. `FactGraphRuntime` is re-exported. Needs `brain_kernel ^0.3.1`.
+- `AppPlayerCoreService.activateBundleAsPlugin(ref, pluginId:, confirmDestructive:)` and `deactivateBundlePlugin(pluginId)` — an installed bundle is activated without mounting anything: its tools enter the catalog as `<pluginId>.<tool>` and leave it again on deactivation (platform spec 29 §2). A tool the bundle declares `annotations.destructiveHint: true` runs only after `confirmDestructive` says yes; with no callback it does not run (spec 29 §6). Needs `mcp_bundle ^0.4.12`.
+- `ToolDispatcher.guardInProcessTool(name, wrap)` — put a guard in front of a registered in-process tool. A `stdio` tool whose `args` name a file the bundle ships (`${`) is refused until the host resolves it.
+- A bundle that declares host tools it cannot run without (`requires.builtinTools`) is no longer opened with part of them: before anything is activated — for a local bundle and for a bundle served by a server — the core checks the names against the host's tool set and throws `BundleRequirementsUnmetException` (`bundleId`, `missingTools`) naming every missing one (platform spec 06 §③). A bundle with no declaration opens as before, and `requires.builtinAtoms` is still only a narrowing of the atoms its scripts see, never a refusal.
+- App notifications have a channel of their own (platform spec 26): `AppNotification.appName` and `.channel` (`AppNotificationChannel` · `NotificationImportance`), and the `NotificationChannelDeclaration` capability to create an app's channels ahead of any notification. Android files them under a channel group named after the app (`app.<appKey>`, channels `app.<appKey>.<channel>`), shows the app's name as the notification's source and folds an app's notifications together; iOS gives each app its own thread and subtitle. `appplayer_system` is the platform's own channel, which no app can post to.
+- `AppPlayerCoreService.initialize(notificationPolicy:)` — `NotificationPolicy` lets the host switch apps off and limit how much one app may post; `GatedNotificationPort` is the wrapper that applies it.
+
+### Fixed
+- A skill, profile or other bundle asset the kernel refuses at activation (for example a skill step its runtime does not execute) is written to the log as `bundle asset not activated: …`. It was dropped without a trace.
+
 ## [0.4.1] - 2026-10-14
 
 ### Added

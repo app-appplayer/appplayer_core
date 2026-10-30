@@ -25,6 +25,7 @@ import 'package:brain_kernel/brain_kernel.dart'
         KbRecordStore,
         KvKbRecordStore,
         KvStoragePort,
+        FactGraphRuntime,
         KernelApp,
         KernelClientConnection,
         clientTools,
@@ -67,6 +68,7 @@ import '../connection/connection_state.dart';
 import '../debug/debug_capture.dart';
 import '../debug/debug_mcp_host.dart';
 import '../lifecycle/lifecycle_coordinator.dart';
+import '../notification/gated_notification_port.dart';
 import '../notification/notification_port.dart';
 import '../permission/platform_permission_port.dart';
 import '../platform_impl/platform_ports.dart';
@@ -591,13 +593,22 @@ class AppPlayerCoreService {
     BackgroundExecutionPort? backgroundPort,
     PlatformPermissionPort? permissionPort,
     AppNotificationPort? notificationPort,
+    // The person's say over app notifications: apps turned off and a limit
+    // per app (platform spec 26 §3.5). Null lets every app's notifications
+    // through.
+    NotificationPolicy? notificationPolicy,
     ConsentPrompt? consentPrompt,
     ConsentStore? consentStore,
     MemoryReclaimer? memoryReclaimer,
     // The kernel key/value store. Native hosts pass a file store so the
-    // kernel's facts and every bundle's `host.kb` state survive a restart;
-    // without one both live in memory for the life of the process.
+    // ethos store, the agent registry and every bundle's `host.kb` state
+    // survive a restart; without one they live in memory for the life of the
+    // process. The fact graph is not in it — see [factGraph].
     KvStoragePort? kvStorage,
+    // The L0 fact graph the kernel writes to (platform spec 30). A host that
+    // keeps knowledge across restarts builds one over a durable store and
+    // hands it here; null keeps the default in-memory graph.
+    FactGraphRuntime? factGraph,
     // The app identity a bundle's `host.kb` state is keyed by — the host
     // answers `listing:<listingId>` for a marketplace install. A null hook or
     // a null answer means `bundle:<manifest.id>`.
@@ -738,8 +749,17 @@ class AppPlayerCoreService {
     // periodic jobs; the lifecycle coordinator applies `backgroundPolicy`.
     _background = backgroundPort ?? defaultBackgroundPort(logger: _logger);
     _permissions = permissionPort ?? defaultPermissionPort(logger: _logger);
-    _notifications =
+    final nativeNotifications =
         notificationPort ?? defaultNotificationPort(logger: _logger);
+    _notifications = notificationPolicy == null
+        ? nativeNotifications
+        : GatedNotificationPort(
+            nativeNotifications,
+            isMuted: notificationPolicy.isMuted,
+            maxPerWindow: notificationPolicy.maxPerWindow,
+            window: notificationPolicy.window,
+            onThrottled: notificationPolicy.onThrottled,
+          );
     await _background.initialize(backgroundPolicy);
     _continuity = ConnectionContinuity(
       connections: _conn,
@@ -785,6 +805,7 @@ class AppPlayerCoreService {
       _kernel = await KernelApp.boot(
         workspaceId: workspaceId,
         kvStorage: _kv,
+        factGraph: factGraph,
         // Co-locate the BM25 retrieval store with the bundle install
         // root so it is cleaned up alongside the bundles themselves.
         bundleRegistryStorageDir: _bundleRegistryDir,
@@ -1130,6 +1151,8 @@ class AppPlayerCoreService {
           );
         }
       }
+      final served = servedBundle;
+      if (served != null) _assertRequirements(served);
       // Resolver over the served bundle's own assets. Absent a bundle
       // document there is nothing to resolve against, and `bundle://` in that
       // document is an unresolvable asset (§6.12.4) — not an error.
@@ -1291,6 +1314,33 @@ class AppPlayerCoreService {
     }
   }
 
+  /// Refuses a bundle that declares host tools this host does not provide
+  /// (`requires.builtinTools`, platform spec 06 §③). Nothing has been
+  /// activated yet when this runs.
+  ///
+  /// Only tools are checked. `requires.builtinAtoms` stays what it has been —
+  /// it narrows which atoms the bundle's scripts see (see [_wireJsTools]) —
+  /// because bundles already in use declare coarse categories this host has
+  /// no atom for (`fs` · `ui` · `workspace`) and still run.
+  void _assertRequirements(McpBundle bundle) {
+    final declared = bundle.requires?.builtinTools ?? const <String>[];
+    if (declared.isEmpty) return;
+    final provided = _toolDispatcher.inProcessToolNames.toSet();
+    final missing = [
+      for (final name in declared)
+        if (!provided.contains(name)) name,
+    ];
+    if (missing.isEmpty) return;
+    _logger.warn('bundle.requires.unmet', {
+      'bundleId': bundle.manifest.id,
+      'missingTools': missing.join(','),
+    });
+    throw BundleRequirementsUnmetException(
+      bundleId: bundle.manifest.id,
+      missingTools: missing,
+    );
+  }
+
   /// FR-CORE-003 — Local Bundle path (`McpBundle` file / inline JSON).
   Future<AppSession> openAppFromBundle(
     BundleRef bundleRef, {
@@ -1310,6 +1360,94 @@ class AppPlayerCoreService {
     );
   }
 
+  /// Bundles activated as plugins, by plugin id (platform spec 29 §2).
+  final Map<String, _JsToolWireState?> _pluginBundles =
+      <String, _JsToolWireState?>{};
+
+  /// Activate the bundle at [bundleRef] as a plugin named [pluginId]: its
+  /// tools enter the catalog as `<pluginId>.<tool>` and nothing is mounted —
+  /// no runtime, no screen, no app session. Replaces an earlier activation
+  /// under the same id. Returns the catalog names it registered.
+  ///
+  /// A `stdio` tool whose `args` name a file the bundle ships (`${`) is
+  /// refused: resolving it needs the install directory and the containment
+  /// check (mcp_bundle §4.5.1), which this host does not do yet.
+  ///
+  /// A tool the bundle declares `annotations.destructiveHint: true` runs only
+  /// after [confirmDestructive] says yes (platform spec 29 §6); with no
+  /// callback it does not run. A read-only hint or no hint lifts nothing.
+  Future<List<String>> activateBundleAsPlugin(
+    BundleRef bundleRef, {
+    required String pluginId,
+    Future<bool> Function(String tool, Map<String, dynamic> args)?
+        confirmDestructive,
+  }) async {
+    _assertReady();
+    final bundle = await _bundleLoader.load(bundleRef);
+    return _withTenantGuard(
+      bundleId: bundle.manifest.id,
+      operation: () async {
+        for (final t in bundle.tools?.tools ?? const <ToolEntry>[]) {
+          if (t.kind != ToolKind.mcp) continue;
+          final args = t.target['args'];
+          if (args is List && args.any((a) => '$a'.contains(r'${'))) {
+            throw StateError('tool ${t.name} names a file the bundle ships; '
+                'this host cannot launch it yet');
+          }
+        }
+        await deactivateBundlePlugin(pluginId);
+        final state = await _activateBundleSections(bundle, pluginId);
+        _pluginBundles[pluginId] = state;
+        for (final t in bundle.tools?.tools ?? const <ToolEntry>[]) {
+          if (t.annotations?.destructiveHint != true) continue;
+          final exposed = '$pluginId.${t.name}';
+          _toolDispatcher.guardInProcessTool(
+            exposed,
+            (inner) => (args) async {
+              final ask = confirmDestructive;
+              if (ask == null || !await ask(exposed, args)) {
+                return <String, dynamic>{
+                  'ok': false,
+                  'error': 'destructive_action_blocked',
+                  'tool': exposed,
+                  'message': 'destructive action was not approved by the human',
+                };
+              }
+              return inner(args);
+            },
+          );
+        }
+        return List<String>.of(state?.toolNames ?? const <String>[]);
+      },
+    );
+  }
+
+  /// Undo [activateBundleAsPlugin]: the tools leave the catalog and what the
+  /// activation opened is closed. A no-op for an id that is not active.
+  Future<void> deactivateBundlePlugin(String pluginId) async {
+    if (!_pluginBundles.containsKey(pluginId)) return;
+    final state = _pluginBundles.remove(pluginId);
+    for (final name in state?.toolNames ?? const <String>[]) {
+      _toolDispatcher.unregisterInProcessTool(name);
+    }
+    final js = state?.runtime;
+    if (js != null) {
+      try {
+        await js.dispose();
+      } catch (e) {
+        _logger.warn('JsToolRuntime dispose threw', null, e);
+      }
+    }
+    await _closeBundleConnections(state);
+    try {
+      final session = _sessions.remove(pluginId);
+      if (session != null) await _bridge?.closeSession(session);
+      await _kernel?.deactivate(pluginId);
+    } catch (e) {
+      _logger.warn('KernelApp.deactivate failed', {'bundleId': pluginId}, e);
+    }
+  }
+
   Future<AppSession> _openFromBundleImpl(
       McpBundle bundle, TrustLevel trustLevel,
       [EntryContext? launchEntry,
@@ -1317,6 +1455,7 @@ class AppPlayerCoreService {
       String? launchRoute]) async {
     final bundleId = bundle.manifest.id;
     _bundleResolver.assertApplicationType(bundle);
+    _assertRequirements(bundle);
     final entry = _bundleResolver.resolveEntry(bundle);
     _bundleResolver.assertUiEntry(entry, bundleId: bundleId);
 
@@ -1422,7 +1561,13 @@ class AppPlayerCoreService {
     // (skill / profile / philosophy / fact / flow / agent plus tools and
     // knowledge.sources). Silently skipped when the bridge is not booted.
     try {
-      await _kernel?.activate(bundle, bundleIdOverride: bundleId);
+      final activated =
+          await _kernel?.activate(bundle, bundleIdOverride: bundleId);
+      // A skill or other asset the kernel refused (a shape its runtime does
+      // not execute) is not registered; say so instead of letting it vanish.
+      for (final problem in activated?.errors ?? const <String>[]) {
+        _logger.warn('bundle asset not activated: $problem', null);
+      }
       // Open a bridge session so JS / agent / workflow dispatch within this
       // bundle inherits the right `scopeId` via Zone, and so any UI mount /
       // stream subscription tied to the session is torn down on close. The
@@ -2217,6 +2362,9 @@ class AppPlayerCoreService {
     await _runtime.removeAllRuntimes();
     await _conn.disconnectAll();
     _metadataCache.clear();
+    for (final id in _pluginBundles.keys.toList()) {
+      await deactivateBundlePlugin(id);
+    }
     // Close every open bridge session before tearing down the
     // kernel so attached UI mounts / subscriptions get a chance to
     // clean up against a still-booted KnowledgeSystem.

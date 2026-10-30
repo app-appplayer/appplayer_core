@@ -113,6 +113,51 @@ void main() {
     });
   });
 
+  group('MethodChannelAppNotificationPort — the app and its channel', () {
+    test('a notification names its app and channel; channels are declared',
+        () async {
+      const channel = MethodChannel('makemind.appplayer_core/methods');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding
+          .instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+
+      final port = MethodChannelAppNotificationPort();
+      await port.post(const AppNotification(
+        id: 'c1',
+        title: 't',
+        body: 'b',
+        source: AppHandle.bundle('chat'),
+        appName: 'Chat',
+        channel: AppNotificationChannel(
+            id: 'calls',
+            name: 'Calls',
+            importance: NotificationImportance.high),
+      ));
+      await port.declareChannels(
+        source: const AppHandle.bundle('chat'),
+        appName: 'Chat',
+        channels: const [
+          AppNotificationChannel(id: 'messages', name: 'Messages'),
+        ],
+      );
+      expect(calls[0].method, 'notification.post');
+      expect(calls[0].arguments['appName'], 'Chat');
+      expect(calls[0].arguments['channel'],
+          {'id': 'calls', 'name': 'Calls', 'importance': 'high'});
+      expect(calls[1].method, 'notification.declareChannels');
+      expect(calls[1].arguments['source'], 'bundle:chat');
+      expect(calls[1].arguments['channels'], [
+        {'id': 'messages', 'name': 'Messages', 'importance': 'normal'}
+      ]);
+    });
+  });
+
   test('exact timing reads as given where the platform has nothing to ask',
       () async {
     expect(

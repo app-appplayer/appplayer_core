@@ -16,7 +16,10 @@ import '../session/app_handle.dart';
 import 'platform_channels.dart';
 
 class MethodChannelAppNotificationPort
-    implements AppNotificationPort, ExactNotificationTiming {
+    implements
+        AppNotificationPort,
+        ExactNotificationTiming,
+        NotificationChannelDeclaration {
   MethodChannelAppNotificationPort({
     MethodChannel? methods,
     EventChannel? taps,
@@ -81,6 +84,9 @@ class MethodChannelAppNotificationPort
         'title': notification.title,
         'body': notification.body,
         'source': notification.source.toString(),
+        if (notification.appName != null) 'appName': notification.appName,
+        if (notification.channel != null)
+          'channel': _channelArgs(notification.channel!),
         if (notification.at != null)
           'at': notification.at!.millisecondsSinceEpoch,
         if (notification.expiresAt != null)
@@ -95,6 +101,31 @@ class MethodChannelAppNotificationPort
       });
     }
   }
+
+  @override
+  Future<void> declareChannels({
+    required AppHandle source,
+    required String appName,
+    required List<AppNotificationChannel> channels,
+  }) async {
+    try {
+      await _methods.invokeMethod<void>('notification.declareChannels', {
+        'source': source.toString(),
+        'appName': appName,
+        'channels': [for (final c in channels) _channelArgs(c)],
+      });
+    } on MissingPluginException {
+      // no native channels — nothing to create
+    } on PlatformException catch (e) {
+      _logger.warn('notification.declareChannels.failed', {'code': e.code});
+    }
+  }
+
+  static Map<String, Object> _channelArgs(AppNotificationChannel c) => {
+        'id': c.id,
+        'name': c.name,
+        'importance': c.importance.name,
+      };
 
   @override
   Future<void> cancel(String id) async {

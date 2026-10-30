@@ -106,7 +106,11 @@ public class AppPlayerCorePlugin: NSObject, FlutterPlugin,
         title: args["title"] as? String ?? "",
         body: args["body"] as? String ?? "",
         source: args["source"] as? String ?? "",
+        appName: args["appName"] as? String,
         at: (args["at"] as? NSNumber)?.doubleValue)
+      result(nil)
+    case "notification.declareChannels":
+      // iOS has no channels: an app's notifications are told apart by thread.
       result(nil)
     case "notification.requestExactTiming":
       // A time trigger is delivered on time; there is nothing to ask for.
@@ -238,10 +242,15 @@ private class NotificationBridge {
   /// [at] is milliseconds since the epoch; a time in the future is left to
   /// the system to show, so it arrives with this app suspended.
   func post(id: String, title: String, body: String, source: String,
-            at: Double?) {
+            appName: String?, at: Double?) {
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
+    // The app that posted it, where the person can see who is speaking; and
+    // its own thread, so the system folds an app's notifications together.
+    let key = source.split(separator: ":", maxSplits: 1).last.map(String.init) ?? source
+    content.subtitle = appName ?? key
+    content.threadIdentifier = "app.\(key)"
     content.sound = .default
     content.userInfo = ["source": source]
     var trigger: UNNotificationTrigger? = nil

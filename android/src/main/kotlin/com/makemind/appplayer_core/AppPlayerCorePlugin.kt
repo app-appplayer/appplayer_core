@@ -120,8 +120,19 @@ class AppPlayerCorePlugin :
                     call.argument<String>("title") ?: "",
                     call.argument<String>("body") ?: "",
                     call.argument<String>("source") ?: "",
+                    call.argument<String>("appName"),
+                    NotificationBridge.ChannelSpec.from(call.argument<Map<String, Any?>>("channel")),
                     call.argument<Number>("at")?.toLong(),
                     call.argument<Number>("expiresAt")?.toLong()
+                )
+                result.success(null)
+            }
+            "notification.declareChannels" -> {
+                notifications.declareChannels(
+                    call.argument<String>("source") ?: "",
+                    call.argument<String>("appName"),
+                    (call.argument<List<Map<String, Any?>>>("channels") ?: emptyList())
+                        .mapNotNull { NotificationBridge.ChannelSpec.from(it) }
                 )
                 result.success(null)
             }

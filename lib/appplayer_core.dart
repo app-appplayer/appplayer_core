@@ -81,10 +81,11 @@ export 'src/metrics/metrics_port.dart';
 export 'src/runtime/notification_router.dart' show McpLogMessageHandler;
 // MCP logging spec — host passes McpLogLevel to setMcpLoggingLevel().
 export 'package:mcp_client/mcp_client.dart' show McpLogLevel;
-// The kernel key/value store a host passes to `initialize(kvStorage:)`; the
-// file adapter serves native hosts.
+// The kernel key/value store a host passes to `initialize(kvStorage:)` (the
+// file adapter serves native hosts) and the L0 fact graph it passes to
+// `initialize(factGraph:)` (platform spec 30).
 export 'package:brain_kernel/brain_kernel.dart'
-    show KvStoragePort, KvStoragePortAdapter;
+    show KvStoragePort, KvStoragePortAdapter, FactGraphRuntime;
 
 // Upstream version constant re-export (flutter_mcp_ui_core) — allows hosts
 // to display the DSL version without importing the runtime package directly.
@@ -144,6 +145,7 @@ export 'src/permission/platform_permission_port.dart';
 export 'src/capability/app_capability.dart';
 export 'src/capability/capability_consent_manager.dart';
 export 'src/notification/notification_port.dart';
+export 'src/notification/gated_notification_port.dart';
 
 // Exceptions
 export 'src/exceptions.dart';
