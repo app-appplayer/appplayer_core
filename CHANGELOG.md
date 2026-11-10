@@ -1,3 +1,11 @@
+## [0.5.0] - 2026-11-10
+
+### Breaking
+- `brain_kernel` `^0.4.0` (re-exported with `flowbrain_core`): the kernel's agent tools refuse an unknown `role` or `axis`, a behavior step whose tool answers `ok: false` fails, and the re-exported knowledge packages carry the behaviour of `mcp_knowledge` 0.3.0, `mcp_knowledge_ops` 0.4.0 and `mcp_fact_graph` 0.3.0 (see the `brain_kernel` 0.4.0 and `flowbrain_core` 0.2.0 entries).
+
+### Changed
+- `flutter_mcp_ui_runtime` `^0.8.9`, `mcp_bundle` `^0.4.14`.
+
 ## [0.4.2] - 2026-10-31
 
 ### Added
